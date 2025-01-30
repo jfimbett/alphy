@@ -3,16 +3,28 @@ export const dynamic = 'force-dynamic'; // Required for streaming/async operatio
 
 export async function POST(req: Request) {
   const { prompt, context, history } = await req.json();
-  const DEVELOPMENT = process.env.NODE_ENV === 'development';
 
-  // Mock response for development
+  // Validate parameters
+  if (!prompt || typeof prompt !== 'string') {
+      return Response.json({ error: "Invalid prompt" }, { status: 400 });
+  }
+
+  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
   if (DEVELOPMENT) {
-    await new Promise(resolve => setTimeout(resolve, 500)); // Simulate delay
+    console.log('Using mock LLM responses');
+    await new Promise(resolve => setTimeout(resolve, 500));
     return Response.json({ 
-      content: "This is a mock LLM response for development purposes. ".repeat(5),
-      tokensUsed: 123
+      content: "[MOCK RESPONSE] This is a development mock response...",
+      tokensUsed: 42
     });
   }
+
+
+  // Ensure history is an array and limit to last 2 messages
+  const limitedHistory = Array.isArray(history) 
+  ? history.slice(-2)
+  : [];
 
   // Real implementation
   try {
@@ -24,8 +36,8 @@ export async function POST(req: Request) {
         stream: false,
         temperature: 0.0,
         messages: [
-          { role: "system", content: context },
-          ...history.slice(-2), // Last 2 messages
+          { role: "system", content: context || "" }, // Handle undefined context
+          ...limitedHistory,
           { role: "user", content: prompt }
         ]
       }),

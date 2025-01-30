@@ -85,17 +85,15 @@ function TreeNode({
       <div className="flex items-center gap-2">
         {/* Conversion Checkbox: only for files */}
         {node.type === 'file' && (
-          <input
-            type="checkbox"
-            checked={node.selected}
-            onChange={(e) => {
-              e.stopPropagation();
-              if (onToggleConversion) {
-                onToggleConversion(node.fullPath!);
-              }
-            }}
-            className="w-4 h-4 accent-blue-600 cursor-pointer"
-          />
+         <input
+         type="checkbox"
+         checked={node.selected ?? true} // Default to true
+         onChange={(e) => {
+           e.stopPropagation();
+           onToggleConversion?.(node.fullPath!);
+         }}
+         className="w-4 h-4 accent-blue-600 cursor-pointer"
+       />
         )}
 
         <button
@@ -105,9 +103,21 @@ function TreeNode({
             node.highlighted ? 'ring-2 ring-blue-500 bg-blue-50 shadow-md' : ''
           } ${
             isSelected ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50'
-          }`}
+          }
+          ${node.selected ? '' : 'opacity-50 grayscale'}`
+          }
         >
-          {/* Folder/File Icon */}
+          {/*{!node.selected && (
+              <span className="text-xs text-gray-500 ml-2">(Excluded from analysis)</span>
+            )} */}
+
+          {/* Exclude from analysis, if not selected, and if its not a folder */}
+          {!node.selected && node.type === 'file' && (
+            <span className="text-xs text-gray-500 ml-2">Excluded from analysis</span>
+          )}
+
+          {/* File/Folder Icon */} 
+
           <span className="w-5 h-5 flex-shrink-0">
             {node.type === 'folder' ? (
               isOpen ? (

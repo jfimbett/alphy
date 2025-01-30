@@ -13,12 +13,12 @@ GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 
 // For development, I do not need to make the actual API call to the local LLM server.
-const DEVELOPMENT = process.env.NODE_ENV === 'development';
+const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
 export default function Dashboard() {
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [contextType, setContextType] = useState<'local' | 'global'>('local');
-  const [globalFiles] = useState<Set<string>>(new Set()); 
+  //const [globalFiles] = useState<Set<string>>(new Set()); 
   const [chatMessage, setChatMessage] = useState('');
   const [chatHistory, setChatHistory] = useState<Array<{ role: string; content: string }>>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -27,6 +27,21 @@ export default function Dashboard() {
   const [processingPhase, setProcessingPhase] = useState<'extracting' | 'summarizing' | 'idle'>('idle');
   const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
+
+  // Add new state at the top of the component
+  const [allSelected, setAllSelected] = useState(true);
+
+      // Add toggle function
+      const toggleAllFiles = (selected: boolean) => {
+        const updateNodes = (nodes: FileNode[]): FileNode[] => nodes.map(n => ({
+          ...n,
+          selected: n.type === 'file' ? selected : n.selected,
+          children: n.children ? updateNodes(n.children) : undefined
+        }));
+        
+        setFileTree(prev => updateNodes(prev));
+        setAllSelected(selected);
+      };
 
   //const [isProcessing, setIsProcessing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -52,11 +67,13 @@ export default function Dashboard() {
     let context = '';
     if (contextType === 'local') {
       context = extractedTexts[selectedFile.fullPath!] || '';
-    } else {
-      context = Array.from(globalFiles)
+    } 
+
+    if (contextType === 'global') {
+      context = Array.from(highlightedFiles)
         .map(path => extractedTexts[path])
         .join('\n\n')
-        .slice(0, 8000); // Limit context length
+        .slice(0, 5000);
     }
 
     const res = await fetch('/api/llm', {
@@ -64,8 +81,8 @@ export default function Dashboard() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: chatMessage,
-        context: context,
-        history: chatHistory.slice(-2) // Keep last 2 messages
+        context:  context || '', // Ensure context exists
+        history: chatHistory.slice(-2) || [] // Ensure array exists
       }),
     });
 
@@ -82,19 +99,8 @@ export default function Dashboard() {
     }
   };
 
-  // Helper: Count how many "file" nodes are in the tree
-  const countFiles = (nodes: FileNode[]): number => {
-    let count = 0;
-    for (const node of nodes) {
-      if (node.type === 'folder' && node.children) {
-        count += countFiles(node.children);
-      } else if (node.type === 'file') {
-        count++;
-      }
-    }
-    return count;
-  };
-
+  
+  
   // ======================
   // DROPZONE CONFIGURATION
   // ======================
@@ -198,6 +204,10 @@ export default function Dashboard() {
           };
           current.children?.push(newNode);
           current = newNode;
+
+          if (isFile) {
+            newNode.selected = true; // Default to checked
+          }
         }
       });
     });
@@ -214,19 +224,36 @@ export default function Dashboard() {
     setSelectedFile(node);
   }, []);
 
+
+  // Add helper function
+const getAllFiles = (nodes: FileNode[]): FileNode[] => {
+  return nodes.flatMap(node => {
+    if (node.type === 'folder' && node.children) {
+      return getAllFiles(node.children);
+    }
+    return node.type === 'file' ? [node] : [];
+  });
+};
+
+
+
   // ======================
   // ANALYZE ALL FILES
   // (Extract text from PDFs, Excels, etc. in a single pass)
   // ======================
   const analyzeFiles = async () => {
     try {
+
+      // Get only selected files
+      const selectedFiles = getAllFiles(fileTree).filter(f => f.selected);
+
       // Phase 1: Extract text
       setProcessingPhase('extracting');
       setIsAnalyzing(true);
       setProgress(0);
       setProcessedFiles(0);
 
-      const total = countFiles(fileTree);
+      const total = selectedFiles.length;
       setTotalFiles(total);
 
       const newExtractedTexts: Record<string, string> = {};
@@ -303,15 +330,23 @@ export default function Dashboard() {
         }
       };
 
-      await traverseAndExtract(fileTree);
+      //await traverseAndExtract(fileTree);
+      //setExtractedTexts(newExtractedTexts);
+
+      // Only the selected ones 
+      await traverseAndExtract(selectedFiles);
       setExtractedTexts(newExtractedTexts);
 
       // Phase 2: Summarization
       setProcessingPhase('summarizing');
       setProgress(0);
       setProcessedFiles(0);
-      const totalFilesToSummarize = Object.keys(newExtractedTexts).length;
-      setTotalFiles(totalFilesToSummarize);
+  
+
+
+      // Similar update for summarization phase
+      const filesToSummarize = selectedFiles.filter(f => extractedTexts[f.fullPath!]);
+      const totalFilesToSummarize = filesToSummarize.length;
 
       const newSummaries: Record<string, string> = {};
       let summaryCount = 0;
@@ -334,9 +369,11 @@ export default function Dashboard() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: prompt,
-              context: text.substring(0, 2000), // First 2000 chars as context
+              context: text.substring(0, 2000) || '', // Ensure context exists and is not too long
+              history: [] // Add empty array if not using history here
             }),
           });
+
           if (!res.ok) {
             newSummaries[fullPath] = 'Summary failed: API error';
             continue;
@@ -415,6 +452,17 @@ export default function Dashboard() {
                 {isAnalyzing ? 'Analyzing...' : 'Analyze Files'}
               </button>
 
+              <button
+                onClick={() => toggleAllFiles(!allSelected)}
+                className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
+              >
+                {allSelected ? 'Deselect All' : 'Select All'}
+              </button>
+
+              <span className="text-sm text-gray-600 ml-4">
+              {getAllFiles(fileTree).filter(f => f.selected).length} files selected
+            </span>
+
               {/* Progress info (only show while analyzing) */}
               {isAnalyzing && (
                 <div className="flex flex-col items-end space-y-2">
@@ -440,13 +488,12 @@ export default function Dashboard() {
               onSelect={handleFileSelect}
               selectedFile={selectedFile}
               onToggleConversion={(path) => {
-                // This handles the checkbox for file processing
                 const updateNodes = (nodes: FileNode[]): FileNode[] => nodes.map(n => ({
                   ...n,
                   selected: n.fullPath === path ? !n.selected : n.selected,
                   children: n.children ? updateNodes(n.children) : undefined
                 }));
-                setFileTree(updateNodes(fileTree));
+                setFileTree(prev => updateNodes(prev));
               }}
               onToggleHighlight={(path) => {
                 // This handles double-click for global context
@@ -545,7 +592,9 @@ export default function Dashboard() {
                 />
                 <span className="flex items-center gap-1">
                   Global Context
-                  <span className="text-gray-500 text-xs">({globalFiles.size} files selected)</span>
+                  <span className="text-gray-500 text-xs">
+                    ({getAllFiles(fileTree).filter(f => f.selected).length} files selected)
+                  </span>
                 </span>
               </label>
             </div>
