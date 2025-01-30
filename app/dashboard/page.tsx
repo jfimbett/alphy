@@ -9,16 +9,19 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import * as XLSX from 'xlsx';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
-//import { callLocalLLM } from '@/utils/localLLMs';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { ChatMessage } from '@/components/ChatMessage';
+import { SummaryContent } from '@/components/SummaryContent';
+import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
+
+
 
 // For development, I do not need to make the actual API call to the local LLM server.
 const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
 export default function Dashboard() {
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
-  const [contextType, setContextType] = useState<'local' | 'global'>('local');
-  //const [globalFiles] = useState<Set<string>>(new Set()); 
+  const [contextType, setContextType] = useState<  'none' | 'local' | 'global'>('none');
   const [chatMessage, setChatMessage] = useState('');
   const [chatHistory, setChatHistory] = useState<Array<{ role: string; content: string }>>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -28,63 +31,62 @@ export default function Dashboard() {
   const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
 
-  // Add new state at the top of the component
+  // For selecting/deselecting all files:
   const [allSelected, setAllSelected] = useState(true);
 
-      // Add toggle function
-      const toggleAllFiles = (selected: boolean) => {
-        const updateNodes = (nodes: FileNode[]): FileNode[] => nodes.map(n => ({
-          ...n,
-          selected: n.type === 'file' ? selected : n.selected,
-          children: n.children ? updateNodes(n.children) : undefined
-        }));
-        
-        setFileTree(prev => updateNodes(prev));
-        setAllSelected(selected);
-      };
+  const toggleAllFiles = (selected: boolean) => {
+    const updateNodes = (nodes: FileNode[]): FileNode[] =>
+      nodes.map((n) => ({
+        ...n,
+        selected: n.type === 'file' ? selected : n.selected,
+        children: n.children ? updateNodes(n.children) : undefined,
+      }));
+    setFileTree((prev) => updateNodes(prev));
+    setAllSelected(selected);
+  };
 
-  //const [isProcessing, setIsProcessing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSubscribed] = useState(false);
 
   // Track progress in percentage (0 to 100)
   const [progress, setProgress] = useState(0);
 
-  // OPTIONAL: If you also want the raw count, store it as well:
+  // Optional: If you also want the raw count:
   const [totalFiles, setTotalFiles] = useState(0);
   const [processedFiles, setProcessedFiles] = useState(0);
 
-  // Add this chat handler
+  // ======================
+  // Chat Handler (no chat history appended now)
+  // ======================
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile || !chatMessage.trim()) return;
 
     setIsChatLoading(true);
+    // We still keep track of local chatHistory for the UI
     const newHistory = [...chatHistory, { role: 'user', content: chatMessage }];
 
     try {
+      let context = '';
 
-    let context = '';
-    if (contextType === 'local') {
-      context = extractedTexts[selectedFile.fullPath!] || '';
-    } 
+      if (contextType === 'local') {
+        context = extractedTexts[selectedFile.fullPath!] || '';
+      } else if (contextType === 'global') {
+        context = Array.from(highlightedFiles)
+          .map((path) => extractedTexts[path])
+          .join('\n\n')
+          .slice(0, 5000);
+      }
 
-    if (contextType === 'global') {
-      context = Array.from(highlightedFiles)
-        .map(path => extractedTexts[path])
-        .join('\n\n')
-        .slice(0, 5000);
-    }
-
-    const res = await fetch('/api/llm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: chatMessage,
-        context:  context || '', // Ensure context exists
-        history: chatHistory.slice(-2) || [] // Ensure array exists
-      }),
-    });
+      // Remove `history: chatHistory.slice(-2)` from the body
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: chatMessage + ('\n\n Context: \n\n' + context ? context : ''),
+          // Not appending chat history here
+        }),
+      });
 
       if (!res.ok) throw new Error('Chat failed');
 
@@ -99,8 +101,6 @@ export default function Dashboard() {
     }
   };
 
-  
-  
   // ======================
   // DROPZONE CONFIGURATION
   // ======================
@@ -140,8 +140,6 @@ export default function Dashboard() {
   const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
 
-    // Convert the FileList to an array of Promises that resolve to
-    // objects with { path, data, blobUrl } — each containing the file content as ArrayBuffer
     const filePromises = Array.from(e.target.files).map((file) => {
       return new Promise<{ path: string; data: ArrayBuffer; blobUrl: string }>((resolve, reject) => {
         const reader = new FileReader();
@@ -153,7 +151,6 @@ export default function Dashboard() {
               blobUrl: URL.createObjectURL(file),
             });
           } else {
-            // Just in case, handle the case where reader.result is null or a string
             reject(new Error('Failed to read file as ArrayBuffer'));
           }
         };
@@ -172,7 +169,6 @@ export default function Dashboard() {
 
   // ======================
   // BUILD FILE TREE
-  // Add a "fullPath" property for each file to use as a unique key in extractedTexts
   // ======================
   const buildFileTree = (
     files: { path: string; data: ArrayBuffer; blobUrl: string }[]
@@ -186,7 +182,7 @@ export default function Dashboard() {
 
       parts.forEach((part, i) => {
         if (!part) return;
-        pathSegments.push(part); // Build up the path piece by piece
+        pathSegments.push(part);
 
         const existing = current.children?.find((n) => n.name === part);
         if (existing) {
@@ -199,7 +195,6 @@ export default function Dashboard() {
             children: isFile ? undefined : [],
             rawData: isFile ? data : undefined,
             content: isFile ? blobUrl : undefined,
-            // fullPath is the entire path up to this point, e.g. "folder/subfolder/file.pdf"
             fullPath: pathSegments.join('/'),
           };
           current.children?.push(newNode);
@@ -217,35 +212,28 @@ export default function Dashboard() {
 
   // ======================
   // HANDLE FILE SELECTION
-  // (Preview the file — do NOT extract text here.)
   // ======================
   const handleFileSelect = useCallback((node: FileNode) => {
     if (node.type === 'folder') return;
     setSelectedFile(node);
   }, []);
 
-
-  // Add helper function
-const getAllFiles = (nodes: FileNode[]): FileNode[] => {
-  return nodes.flatMap(node => {
-    if (node.type === 'folder' && node.children) {
-      return getAllFiles(node.children);
-    }
-    return node.type === 'file' ? [node] : [];
-  });
-};
-
-
+  // Helper to get all files from the tree
+  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
+    return nodes.flatMap((node) => {
+      if (node.type === 'folder' && node.children) {
+        return getAllFiles(node.children);
+      }
+      return node.type === 'file' ? [node] : [];
+    });
+  };
 
   // ======================
   // ANALYZE ALL FILES
-  // (Extract text from PDFs, Excels, etc. in a single pass)
   // ======================
   const analyzeFiles = async () => {
     try {
-
-      // Get only selected files
-      const selectedFiles = getAllFiles(fileTree).filter(f => f.selected);
+      const selectedFiles = getAllFiles(fileTree).filter((f) => f.selected);
 
       // Phase 1: Extract text
       setProcessingPhase('extracting');
@@ -259,7 +247,6 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
       const newExtractedTexts: Record<string, string> = {};
       let processedCount = 0;
 
-      // Define a helper function to recursively traverse the file tree
       const traverseAndExtract = async (nodes: FileNode[]) => {
         for (const node of nodes) {
           if (node.type === 'folder' && node.children) {
@@ -288,20 +275,16 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
                 extracted = '[Error extracting PDF text]';
               }
             }
-            // Excel Extraction (for .xlsx or .xls)
+            // Excel Extraction
             else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
               try {
                 const workbook = XLSX.read(new Uint8Array(node.rawData), {
                   type: 'array',
                 });
-                // Simple example: read each sheet, join all rows/cells
                 let excelText = '';
                 workbook.SheetNames.forEach((sheetName) => {
                   const worksheet = workbook.Sheets[sheetName];
-                  const sheetAsJson = XLSX.utils.sheet_to_json(worksheet, {
-                    header: 1,
-                  });
-                  // sheetAsJson is an array of rows, each row is an array of cells
+                  const sheetAsJson = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                   (sheetAsJson as (string | number | boolean | null)[][]).forEach((row) => {
                     excelText += row.join(' ') + '\n';
                   });
@@ -313,16 +296,13 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
                 extracted = '[Error extracting Excel text]';
               }
             }
-            // If other file types, skip or handle differently
+            // Other file types
             else {
               extracted = '[Text extraction not available for this file type]';
             }
 
-            // Store the extracted text in our object,
-            // keyed by the node's unique fullPath.
-            newExtractedTexts[node.fullPath as string] = extracted;
+            newExtractedTexts[node.fullPath!] = extracted.trim().replace(/\s+/g, ' ');
 
-            // update progress
             processedCount++;
             setProcessedFiles(processedCount);
             setProgress(Math.round((processedCount / total) * 100));
@@ -330,10 +310,6 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
         }
       };
 
-      //await traverseAndExtract(fileTree);
-      //setExtractedTexts(newExtractedTexts);
-
-      // Only the selected ones 
       await traverseAndExtract(selectedFiles);
       setExtractedTexts(newExtractedTexts);
 
@@ -341,68 +317,58 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
       setProcessingPhase('summarizing');
       setProgress(0);
       setProcessedFiles(0);
-  
-
-
-      // Similar update for summarization phase
-      const filesToSummarize = selectedFiles.filter(f => extractedTexts[f.fullPath!]);
-      const totalFilesToSummarize = filesToSummarize.length;
 
       const newSummaries: Record<string, string> = {};
       let summaryCount = 0;
 
       for (const [fullPath, text] of Object.entries(newExtractedTexts)) {
         try {
-          const prompt = `Summarize the following text in one paragraph, 
-        focusing on key financial metrics, risks, and opportunities.
-        Recall that the text could be written in different languages other than English.
-        \n\n${text}`;
+          const prompt = `Summarize the following text in one paragraph,
+            focusing on key financial metrics, risks, and opportunities.
+            Recall that the text could be written in different languages other than English.
+            \n\n${text}`;
 
           if (DEVELOPMENT) {
             newSummaries[fullPath] = 'Some random text for development purposes.....';
-            continue;
-          }
-          console.log('Prompt:', prompt);
-          // Replace direct LLM call with API call
-          const res = await fetch('/api/llm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: prompt,
-              context: text.substring(0, 2000) || '', // Ensure context exists and is not too long
-              history: [] // Add empty array if not using history here
-            }),
-          });
+          } else {
+            const res = await fetch('/api/llm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: prompt,
+                context: text.substring(0, 2000) || '', // keep context short
+                history: [], // No chat history appended
+              }),
+            });
 
-          if (!res.ok) {
-            newSummaries[fullPath] = 'Summary failed: API error';
-            continue;
+            if (!res.ok) {
+              newSummaries[fullPath] = 'Summary failed: API error';
+            } else {
+              const data = await res.json();
+              newSummaries[fullPath] = data.content;
+            }
           }
-
-          const data = await res.json();
-          newSummaries[fullPath] = data.content;
         } catch (error) {
           newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
         }
 
         summaryCount++;
         setProcessedFiles(summaryCount);
-        setProgress(Math.round((summaryCount / totalFilesToSummarize) * 100));
-        // setSummaryProgress(Math.round((summaryCount / totalFilesToSummarize) * 100));
+        setProgress(Math.round((summaryCount / Object.keys(newExtractedTexts).length) * 100));
       }
+
       setSummaries(newSummaries);
     } catch (error) {
       console.error('Processing error:', error);
-      // Handle error state
     } finally {
       setIsAnalyzing(false);
       setProcessingPhase('idle');
     }
   };
 
-  // ======================
-  // RENDER
-  // ======================
+  // State for toggling extracted text
+  const [showExtracted, setShowExtracted] = useState(false);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
@@ -460,8 +426,8 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
               </button>
 
               <span className="text-sm text-gray-600 ml-4">
-              {getAllFiles(fileTree).filter(f => f.selected).length} files selected
-            </span>
+                {getAllFiles(fileTree).filter((f) => f.selected).length} files selected
+              </span>
 
               {/* Progress info (only show while analyzing) */}
               {isAnalyzing && (
@@ -482,21 +448,21 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
               )}
             </div>
 
-            {/* File Tree (top) */}
+            {/* File Tree */}
             <FileTree
               nodes={fileTree}
               onSelect={handleFileSelect}
               selectedFile={selectedFile}
               onToggleConversion={(path) => {
-                const updateNodes = (nodes: FileNode[]): FileNode[] => nodes.map(n => ({
-                  ...n,
-                  selected: n.fullPath === path ? !n.selected : n.selected,
-                  children: n.children ? updateNodes(n.children) : undefined
-                }));
-                setFileTree(prev => updateNodes(prev));
+                const updateNodes = (nodes: FileNode[]): FileNode[] =>
+                  nodes.map((n) => ({
+                    ...n,
+                    selected: n.fullPath === path ? !n.selected : n.selected,
+                    children: n.children ? updateNodes(n.children) : undefined,
+                  }));
+                setFileTree((prev) => updateNodes(prev));
               }}
               onToggleHighlight={(path) => {
-                // This handles double-click for global context
                 const newHighlighted = new Set(highlightedFiles);
                 if (newHighlighted.has(path)) {
                   newHighlighted.delete(path);
@@ -504,19 +470,20 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
                   newHighlighted.add(path);
                 }
                 setHighlightedFiles(newHighlighted);
-                
-                const updateNodes = (nodes: FileNode[]): FileNode[] => nodes.map(n => ({
-                  ...n,
-                  highlighted: newHighlighted.has(n.fullPath!),
-                  children: n.children ? updateNodes(n.children) : undefined
-                }));
+
+                const updateNodes = (nodes: FileNode[]): FileNode[] =>
+                  nodes.map((n) => ({
+                    ...n,
+                    highlighted: newHighlighted.has(n.fullPath!),
+                    children: n.children ? updateNodes(n.children) : undefined,
+                  }));
                 setFileTree(updateNodes(fileTree));
               }}
             />
           </div>
         )}
 
-        {/* FILE PREVIEW / EXTRACTED TEXT (below) */}
+        {/* FILE PREVIEW & EXTRACTED TEXT */}
         {selectedFile && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h3 className="text-lg font-semibold mb-4">{selectedFile.name}</h3>
@@ -537,17 +504,30 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
               )}
             </div>
 
-            {/* Extracted Text (show only if it's been analyzed) */}
+            {/* Extracted Text: show/hide toggle */}
             {extractedTexts[selectedFile.fullPath || ''] && (
               <div>
-                <h4 className="text-sm font-medium text-gray-800 mb-2">Extracted Text</h4>
-                <textarea
-                  className="w-full h-40 p-2 border text-black rounded"
-                  readOnly
-                  value={extractedTexts[selectedFile.fullPath || '']}
-                />
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-gray-800 mb-2">Extracted Text</h4>
+                  <button
+                    onClick={() => setShowExtracted((prev) => !prev)}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    {showExtracted ? 'Hide' : 'Show'} Extracted Text
+                  </button>
+                </div>
+
+                {showExtracted && (
+                  <div className="border p-3 rounded bg-gray-50 text-sm text-gray-800">
+                    {/* Replace the old raw text with the new Markdown component */}
+                    <ExtractedTextContent content={extractedTexts[selectedFile.fullPath || '']} />
+                  </div>
+                )}
               </div>
             )}
+
+
+            {/* AI Summary & Reasoning */}
             {summaries[selectedFile.fullPath || ''] && (
               <div className="mt-8 border-t pt-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
@@ -557,9 +537,7 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
                   Key Insights
                 </h4>
                 <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-                  <div className="prose max-w-none text-gray-700">
-                    {summaries[selectedFile.fullPath || '']}
-                  </div>
+                  <SummaryContent content={summaries[selectedFile.fullPath || '']} />
                   <div className="mt-4 flex items-center text-sm text-green-700">
                     <InformationCircleIcon className="w-4 h-4 mr-1" />
                     Summary generated by AI - verify against original documents
@@ -569,38 +547,55 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
             )}
           </div>
         )}
-          <div className="mb-4 flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+
+        {/* CONTEXT SELECTION */}
+        <div className="mb-4 flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            {/* NEW: No Context */}
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
                 <input
                   type="radio"
-                  checked={contextType === 'local'}
-                  onChange={() => setContextType('local')}
+                  checked={contextType === 'none'}
+                  onChange={() => setContextType('none')}
                   className="w-4 h-4"
                 />
                 <span className="flex items-center gap-1">
-                  Local Context
-                  <span className="text-gray-500 text-xs">(Current file only)</span>
+                  No Context
+                  <span className="text-gray-500 text-xs">(Question only)</span>
                 </span>
               </label>
-              <label className="flex items-center gap-1 text-sm font-medium text-gray-700 ml-4">
-                <input
-                  type="radio"
-                  checked={contextType === 'global'}
-                  onChange={() => setContextType('global')}
-                  className="w-4 h-4"
-                />
-                <span className="flex items-center gap-1">
-                  Global Context
-                  <span className="text-gray-500 text-xs">
-                    ({getAllFiles(fileTree).filter(f => f.selected).length} files selected)
-                  </span>
+
+
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+              <input
+                type="radio"
+                checked={contextType === 'local'}
+                onChange={() => setContextType('local')}
+                className="w-4 h-4"
+              />
+              <span className="flex items-center gap-1">
+                Local Context
+                <span className="text-gray-500 text-xs">(Current file only)</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700 ml-4">
+              <input
+                type="radio"
+                checked={contextType === 'global'}
+                onChange={() => setContextType('global')}
+                className="w-4 h-4"
+              />
+              <span className="flex items-center gap-1">
+                Global Context
+                <span className="text-gray-500 text-xs">
+                  ({getAllFiles(fileTree).filter((f) => f.selected).length} files selected)
                 </span>
-              </label>
-            </div>
+              </span>
+            </label>
           </div>
+        </div>
 
-
+        {/* CHAT */}
         <div className="mt-8 border-t pt-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
             <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
@@ -609,28 +604,9 @@ const getAllFiles = (nodes: FileNode[]): FileNode[] => {
             About This File
           </h3>
 
-          {/* Add scroll to conversation box by setting a max height & overflow */}
           <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
             {chatHistory.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`p-4 rounded-lg ${
-                  msg.role === 'user'
-                    ? 'bg-blue-50 border border-blue-200'
-                    : 'bg-purple-50 border border-purple-200'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <span
-                    className={`text-sm font-medium ${
-                      msg.role === 'user' ? 'text-blue-600' : 'text-purple-600'
-                    }`}
-                  >
-                    {msg.role === 'user' ? 'You:' : 'AI:'}
-                  </span>
-                  <p className="text-gray-700 flex-1">{msg.content}</p>
-                </div>
-              </div>
+              <ChatMessage key={idx} role={msg.role} content={msg.content} />
             ))}
           </div>
 
