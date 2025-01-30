@@ -11,7 +11,10 @@ export default function Home() {
           <p className="text-gray-600 mb-8 max-w-2xl mx-auto">
             Alphy for PE empowers private equity funds with advanced AI tools to analyze and manage fund and company data efficiently.
           </p>
-          <Link href="/dashboard" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">
+          <Link
+            href="/login"
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+          >
             Get Started
           </Link>
         </div>

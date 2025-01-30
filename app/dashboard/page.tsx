@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import JSZip from 'jszip';
 import Navbar from '@/components/Navbar';
@@ -14,12 +14,11 @@ import { ChatMessage } from '@/components/ChatMessage';
 import { SummaryContent } from '@/components/SummaryContent';
 import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
 
-
-
-// For development, I do not need to make the actual API call to the local LLM server.
 const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
 export default function Dashboard() {
+  
+  const formRef = useRef<HTMLFormElement>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [contextType, setContextType] = useState<  'none' | 'local' | 'global'>('none');
   const [chatMessage, setChatMessage] = useState('');
@@ -34,6 +33,54 @@ export default function Dashboard() {
   // For selecting/deselecting all files:
   const [allSelected, setAllSelected] = useState(true);
 
+  const handleSaveProgress = async () => {
+    try {
+      // Send fileTree, extractedTexts, summaries, chatHistory to the API
+      const response = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileTree,
+          extractedTexts,
+          summaries,
+          chatHistory,
+        }),
+      });
+      if (!response.ok) throw new Error('Failed to save session');
+      const data = await response.json();
+      alert('Session saved successfully! Session ID = ' + data.session_id);
+    } catch (error) {
+      console.error('Error saving session:', error);
+      alert('Error saving session: ' + (error as Error).message);
+    }
+  };
+
+   // Add a function to LOAD progress:
+   const handleLoadProgress = async () => {
+    try {
+      const response = await fetch('/api/sessions');
+      if (!response.ok) throw new Error('Failed to load session');
+      const data = await response.json();
+      if (!data.session_data) {
+        alert('No session data found.');
+        return;
+      }
+      // De-structure the data
+      const { fileTree, extractedTexts, summaries, chatHistory } = data.session_data;
+
+      // Update local state
+      setFileTree(fileTree || []);
+      setExtractedTexts(extractedTexts || {});
+      setSummaries(summaries || {});
+      setChatHistory(chatHistory || []);
+      alert('Session loaded successfully!');
+    } catch (error) {
+      console.error('Error loading session:', error);
+      alert('Error loading session: ' + (error as Error).message);
+    }
+  };
+
+
   const toggleAllFiles = (selected: boolean) => {
     const updateNodes = (nodes: FileNode[]): FileNode[] =>
       nodes.map((n) => ({
@@ -46,7 +93,6 @@ export default function Dashboard() {
   };
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isSubscribed] = useState(false);
 
   // Track progress in percentage (0 to 100)
   const [progress, setProgress] = useState(0);
@@ -448,6 +494,22 @@ export default function Dashboard() {
               )}
             </div>
 
+             {/* Example: Add "Save Progress" & "Load Progress" buttons at top or bottom */}
+            <div className="flex space-x-4 mb-4">
+              <button
+                onClick={handleSaveProgress}
+                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors"
+              >
+                Save Progress
+              </button>
+              <button
+                onClick={handleLoadProgress}
+                className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
+              >
+                Load Progress
+              </button>
+            </div>
+
             {/* File Tree */}
             <FileTree
               nodes={fileTree}
@@ -610,33 +672,36 @@ export default function Dashboard() {
             ))}
           </div>
 
-          <form onSubmit={handleChatSubmit} className="flex gap-2 text-gray-600">
-            <textarea
-              value={chatMessage}
-              onChange={(e) => setChatMessage(e.target.value)}
-              className="flex-1 p-2 border rounded-lg"
-              placeholder="Ask a question about this file..."
-              rows={2}
-              disabled={isChatLoading}
-            />
-            <button
-              type="submit"
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
-              disabled={isChatLoading}
-            >
-              {isChatLoading ? 'Sending...' : 'Ask'}
-            </button>
-          </form>
+          <form 
+                ref={formRef} // Add ref here
+                onSubmit={handleChatSubmit} 
+                className="flex gap-2 text-gray-600"
+              >
+                <textarea
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Handle Enter key without Shift
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault(); // Prevent default newline
+                      formRef.current?.requestSubmit(); // Programmatically submit form
+                    }
+                    // Shift+Enter will maintain default behavior (new line)
+                  }}
+                  className="flex-1 p-2 border rounded-lg"
+                  placeholder="Ask a question about this file..."
+                  rows={2}
+                  disabled={isChatLoading}
+                />
+                <button
+                  type="submit"
+                  className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                  disabled={isChatLoading}
+                >
+                  {isChatLoading ? 'Sending...' : 'Ask'}
+                </button>
+              </form>
         </div>
-
-        {/* SUBSCRIBE SECTION */}
-        {!isSubscribed && (
-          <div className="bg-white rounded-lg shadow-sm p-6 text-center">
-            <button className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors">
-              Subscribe Now
-            </button>
-          </div>
-        )}
       </main>
     </div>
   );
