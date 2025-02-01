@@ -100,113 +100,92 @@ export async function GET() {
   }
 }
 
-
 export async function POST(request: Request) {
   let client;
   try {
     client = await pool.connect();
     const body = await request.json();
+    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
 
-    // The frontend (Dashboard) will send these:
-    const { fileTree, extractedTexts, summaries, chatHistory, uploadName } = body;
+    if (!uploadName) {
+      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
+    }
 
-    const uploadPath = '/uploads/temp.zip'; // or some placeholder
-    
-    const finalName = uploadName || `New Upload - ${new Date().toLocaleString()}`;
-
-    // 1) Insert a new row in `uploads`
-    const uploadResult = await client.query(
-      `INSERT INTO uploads (user_id, upload_name, upload_path)
-       VALUES ($1, $2, $3)
-       RETURNING upload_id`,
-      [MOCK_USER_ID, finalName, uploadPath]
+    // For now, let's assume user_id=1 or something (you can replace it with the actual user ID).
+    const userId = 1;
+    const insertUploadRes = await client.query(
+      `INSERT INTO uploads (user_id, upload_name) VALUES ($1, $2) RETURNING upload_id`,
+      [userId, uploadName]
     );
-    const newUploadId = uploadResult.rows[0].upload_id;
+    const newUploadId = insertUploadRes.rows[0].upload_id;
 
-    // We'll store data in the DB. Let’s parse the fileTree to get each file node.
-    // The fileTree is nested, so we need a recursive helper or a flatten approach.
+    // We'll collect all file info from fileTree
     const filesToInsert: Array<{
       fullPath: string;
       fileName: string;
-      isFolder: boolean;
-      rawData?: ArrayBuffer;
+      fileDataBase64?: string;
+      mimeType: string;
     }> = [];
 
     function traverseTree(nodes: FileNode[]) {
       for (const node of nodes) {
         if (node.type === 'file') {
+          // We expect base64 in node.base64Data if we added that in the front end
           filesToInsert.push({
             fullPath: node.fullPath || '',
             fileName: node.name,
-            isFolder: false,
+            fileDataBase64: node.base64Data, // base64 string from the front end
+            mimeType: node.mimeType || 'application/octet-stream'
           });
         }
-        if (node.children?.length) {
-          traverseTree(node.children);
-        }
+        if (node.children?.length) traverseTree(node.children);
       }
     }
     traverseTree(fileTree);
 
-    // 2) Insert each file into `files` table
-    //    We won't store the actual binary data in the DB here (just the name/path).
-    const insertedFileIdsByFullPath: Record<string, number> = {};
-
     for (const file of filesToInsert) {
-      // We'll store file_name, plus maybe we want a file_path. For the demo, just store fullPath.
-      const res = await client.query(
-        `INSERT INTO files (upload_id, file_name, file_path, mime_type, is_extracted)
-         VALUES ($1, $2, $3, $4, $5)
+
+      
+      // Insert new file row
+      const fileDataBuffer = file.fileDataBase64
+        ? Buffer.from(file.fileDataBase64, 'base64')
+        : null;
+      const insertFileRes = await client.query(
+        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING file_id`,
         [
           newUploadId,
           file.fileName,
-          file.fullPath,             // Storing the "fullPath" as the file_path
-          'application/octet-stream', // Or guess from extension
-          false,                      // We'll set true if we have extraction
+          file.fullPath,
+          file.mimeType,
+          fileDataBuffer,
+          false
         ]
       );
-      insertedFileIdsByFullPath[file.fullPath] = res.rows[0].file_id;
+
+      const fileId = insertFileRes.rows[0].file_id;
+
+      // If there's extracted text or summary, insert into extractions
+      const extractedText = extractedTexts[file.fullPath];
+      const summary = summaries[file.fullPath];
+      if (extractedText || summary) {
+        // Mark file as extracted
+        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id=$1`, [fileId]);
+        // Insert extraction
+        await client.query(
+          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
+           VALUES ($1, $2, $3)`,
+          [fileId, extractedText || null, summary || null]
+        );
+      }
     }
-
-    // 3) Insert extractions for the extracted text & summary
-    //    We'll loop over your "extractedTexts" and "summaries" objects. 
-    //    Each key is a file "fullPath".
-    for (const [fullPath, text] of Object.entries(extractedTexts)) {
-      // If we inserted this path in the files table, we have a file_id
-      const fileId = insertedFileIdsByFullPath[fullPath];
-      if (!fileId) continue; // skip if not found
-
-      // Mark the file as extracted
-      await client.query(
-        `UPDATE files 
-            SET is_extracted = TRUE
-          WHERE file_id = $1`,
-        [fileId]
-      );
-
-      const summary = summaries[fullPath] || null; // might be absent
-
-      await client.query(
-        `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-         VALUES ($1, $2, $3)`,
-        [fileId, text, summary]
-      );
-    }
-
-    // Optionally store chatHistory somewhere if you want. You could create a `chat_sessions` table, etc.
-    // For now, we won't do that, or we'll store them in "session_data" if you want.
 
     client.release();
-
-    return NextResponse.json({
-      success: true,
-      upload_id: newUploadId,
-      message: 'Data saved into uploads/files/extractions!',
-    });
+    return NextResponse.json({ upload_id: newUploadId, chatHistory }, { status: 200 });
   } catch (error) {
-    console.error('Error saving to DB:', error);
+    console.error('Error creating new upload:', error);
     if (client) client.release();
-    return NextResponse.json({ error: 'Error saving data' }, { status: 500 });
+    return NextResponse.json({ error: 'Error creating new upload' }, { status: 500 });
   }
 }

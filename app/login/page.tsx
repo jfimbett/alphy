@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation'; // in Next.js 13, "useRouter" is from 'next/navigation'
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 
@@ -11,22 +11,20 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  // Hard-coded test user for now
-  const TEST_USER_EMAIL = 'test@example.com';
-  const TEST_USER_PASS = 'test123';
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    // Basic check
-    if (email === TEST_USER_EMAIL && password === TEST_USER_PASS) {
-      // "Log in" success. In a real app, you'd set a JWT cookie or session.
-      alert('Login successful!');
-      router.push('/dashboard'); // go to the dashboard
-    } else {
+    // In a real app, authenticate via your backend.
+    if (!email || !password) {
       setError('Invalid email or password');
+      return;
     }
+
+    // For demonstration, assume login is successful if fields are filled:
+    localStorage.setItem('loggedIn', 'true');
+    localStorage.setItem('userEmail', email);
+    router.push('/dashboard');
   };
 
   return (
@@ -34,11 +32,11 @@ export default function LoginPage() {
       <Navbar />
       <main className="flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
-          <h1 className="text-2xl font-bold text-center text-blue-600 mb-6">Welcome Back</h1>
-          
+          <h1 className="text-2xl font-bold text-center text-blue-600 mb-6">
+            Welcome Back
+          </h1>
+          {error && <p className="text-red-600 text-sm">{error}</p>}
           <form onSubmit={handleLogin} className="space-y-4">
-            {error && <p className="text-red-600 text-sm">{error}</p>}
-            
             <div>
               <label className="block text-gray-700 text-sm font-medium mb-1">
                 Email
@@ -52,7 +50,6 @@ export default function LoginPage() {
                 placeholder="Enter your email"
               />
             </div>
-
             <div>
               <label className="block text-gray-700 text-sm font-medium mb-1">
                 Password
@@ -66,7 +63,6 @@ export default function LoginPage() {
                 placeholder="Enter your password"
               />
             </div>
-
             <button
               type="submit"
               className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors"
@@ -74,7 +70,6 @@ export default function LoginPage() {
               Log In
             </button>
           </form>
-
           <div className="mt-4 text-center text-sm text-gray-600">
             Don&apos;t have an account?{' '}
             <Link href="/signup" className="text-blue-600 hover:underline">

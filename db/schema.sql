@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Ensure a user row with user_id = 1 (so we can insert uploads with user_id=1)
+INSERT INTO users (user_id, email, password_hash)
+VALUES (1, 'defaultuser@alpha.com', 'someFakeHash')
+ON CONFLICT (user_id) DO NOTHING;
+
 -- 2) Uploads table
 CREATE TABLE IF NOT EXISTS uploads (
   upload_id SERIAL PRIMARY KEY,
@@ -31,7 +36,11 @@ CREATE TABLE IF NOT EXISTS files (
   FOREIGN KEY (upload_id) REFERENCES uploads(upload_id)
 );
 
--- 4) Extractions table
+-- 4) Make sure the file_data column exists in 'files'
+ALTER TABLE files
+  ADD COLUMN IF NOT EXISTS file_data BYTEA;
+
+-- 5) Extractions table
 CREATE TABLE IF NOT EXISTS extractions (
   extraction_id SERIAL PRIMARY KEY,
   file_id INT NOT NULL,
@@ -42,7 +51,7 @@ CREATE TABLE IF NOT EXISTS extractions (
   FOREIGN KEY (file_id) REFERENCES files(file_id)
 );
 
--- 5) Named entities (optional)
+-- 6) Named Entities table
 CREATE TABLE IF NOT EXISTS named_entities (
   entity_id SERIAL PRIMARY KEY,
   file_id INT NOT NULL,
@@ -53,7 +62,7 @@ CREATE TABLE IF NOT EXISTS named_entities (
   FOREIGN KEY (file_id) REFERENCES files(file_id)
 );
 
--- 6) Sessions table (to store user progress)
+-- 7) Sessions table
 CREATE TABLE IF NOT EXISTS sessions (
   session_id SERIAL PRIMARY KEY,
   user_id INT NOT NULL,
