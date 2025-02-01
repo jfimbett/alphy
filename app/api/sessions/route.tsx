@@ -1,67 +1,84 @@
 import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
 
-// In a real app, you'd parse the token/session to get the actual user_id.
-const MOCK_USER_ID = 1;
-
-export async function GET() {
+export async function GET(request: Request) {
+  const client = await pool.connect();
   try {
-    const client = await pool.connect();
-
-    // We'll just return the most recent session_data for this user.
-    const result = await client.query(
-      `SELECT session_data 
-         FROM sessions 
-        WHERE user_id = $1 
-        ORDER BY updated_at DESC 
-        LIMIT 1`,
-      [MOCK_USER_ID]
-    );
-
-    client.release();
-
-    // If no row found, return an empty object
-    if (result.rows.length === 0) {
-      return NextResponse.json({ session_data: null });
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    return NextResponse.json({ session_data: result.rows[0].session_data });
+    // Get latest session with files
+    const sessionResult = await client.query(
+      `SELECT s.session_id, s.session_data, 
+              f.file_id, f.file_name, f.file_type
+       FROM sessions s
+       LEFT JOIN files f ON f.session_id = s.session_id
+       WHERE s.user_id = $1
+       ORDER BY s.created_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (sessionResult.rows.length === 0) {
+      return NextResponse.json({ session_data: {} });
+    }
+
+    // Structure response
+    const sessionData = sessionResult.rows[0].session_data;
+    const files = sessionResult.rows
+      .filter(row => row.file_id)
+      .map(row => ({
+        file_id: row.file_id,
+        name: row.file_name,
+        type: row.file_type
+      }));
+
+    return NextResponse.json({ 
+      session_data: { ...sessionData, files }
+    });
   } catch (error) {
-    console.error('Error loading session:', error);
-    return NextResponse.json({ error: 'Error loading session' }, { status: 500 });
+    console.error('Session load error:', error);
+    return NextResponse.json({ error: 'Failed to load session' }, { status: 500 });
+  } finally {
+    client.release();
   }
 }
 
 export async function POST(request: Request) {
+  const client = await pool.connect();
   try {
-    const body = await request.json();
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    // body should contain "fileTree", "extractedTexts", "summaries", "chatHistory", etc.
-    const { fileTree, extractedTexts, summaries, chatHistory } = body;
-
-    const sessionData = {
-      fileTree,
-      extractedTexts,
-      summaries,
-      chatHistory,
-    };
-
-    const client = await pool.connect();
-
-    // Upsert logic: For simplicity, just INSERT a new row each time we save.
-    // Or you could find the existing row for user_id=1 and UPDATE it.
-    const result = await client.query(
-      `INSERT INTO sessions (user_id, session_data, updated_at) 
-       VALUES ($1, $2, NOW())
+    const { sessionData, fileIds } = await request.json();
+    
+    // Create new session
+    const sessionResult = await client.query(
+      `INSERT INTO sessions (user_id, session_data)
+       VALUES ($1, $2)
        RETURNING session_id`,
-      [MOCK_USER_ID, sessionData]
+      [userId, sessionData]
     );
+    
+    // Link files to session
+    if (fileIds?.length > 0) {
+      await client.query(
+        `UPDATE files
+         SET session_id = $1
+         WHERE file_id = ANY($2)`,
+        [sessionResult.rows[0].session_id, fileIds]
+      );
+    }
 
-    client.release();
-
-    return NextResponse.json({ success: true, session_id: result.rows[0].session_id });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Error saving session:', error);
-    return NextResponse.json({ error: 'Error saving session' }, { status: 500 });
+    console.error('Session save error:', error);
+    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
+  } finally {
+    client.release();
   }
 }

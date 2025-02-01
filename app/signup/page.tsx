@@ -13,25 +13,43 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const router = useRouter();
-
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessMessage('');
+    
     if (!email || !password || !company || !reason) {
       setError('Please fill out all fields');
       return;
     }
+  
     try {
-      // In a real app, you'd call your API to create the user.
-      console.log('Signing up with:', { email, password, company, reason });
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          password,
+          company,
+          reason
+        }),
+      });
+  
+      const data = await response.json();
+  
+      if (!response.ok) {
+        throw new Error(data.error || 'Signup failed');
+      }
+  
       setSuccessMessage('Sign-up successful! Redirecting to login...');
       setTimeout(() => {
         router.push('/login');
       }, 3000);
     } catch (err) {
       console.error('Signup Error:', err);
-      setError('Error creating account. Please try again.');
+      setError(err instanceof Error ? err.message : 'Error creating account. Please try again.');
     }
   };
 

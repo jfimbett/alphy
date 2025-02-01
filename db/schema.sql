@@ -6,13 +6,11 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   full_name VARCHAR(255),
+  company VARCHAR(255),
+  reason TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Ensure a user row with user_id = 1 (so we can insert uploads with user_id=1)
-INSERT INTO users (user_id, email, password_hash)
-VALUES (1, 'defaultuser@alpha.com', 'someFakeHash')
-ON CONFLICT (user_id) DO NOTHING;
 
 -- 2) Uploads table
 CREATE TABLE IF NOT EXISTS uploads (
@@ -24,21 +22,27 @@ CREATE TABLE IF NOT EXISTS uploads (
   FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
--- 3) Files table
-CREATE TABLE IF NOT EXISTS files (
-  file_id SERIAL PRIMARY KEY,
-  upload_id INT NOT NULL,
-  file_name VARCHAR(255) NOT NULL,
-  file_path TEXT,
-  mime_type VARCHAR(100),
-  is_extracted BOOLEAN NOT NULL DEFAULT FALSE,
+-- 7) Sessions table
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL,
+  session_data JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (upload_id) REFERENCES uploads(upload_id)
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
--- 4) Make sure the file_data column exists in 'files'
-ALTER TABLE files
-  ADD COLUMN IF NOT EXISTS file_data BYTEA;
+
+CREATE TABLE files (
+  file_id SERIAL PRIMARY KEY,
+  user_id INT REFERENCES users(user_id),
+  session_id INT REFERENCES sessions(session_id),
+  file_name TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  file_data BYTEA NOT NULL,
+  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- 5) Extractions table
 CREATE TABLE IF NOT EXISTS extractions (
@@ -62,12 +66,3 @@ CREATE TABLE IF NOT EXISTS named_entities (
   FOREIGN KEY (file_id) REFERENCES files(file_id)
 );
 
--- 7) Sessions table
-CREATE TABLE IF NOT EXISTS sessions (
-  session_id SERIAL PRIMARY KEY,
-  user_id INT NOT NULL,
-  session_data JSONB,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(user_id)
-);

@@ -63,7 +63,6 @@ export default function Dashboard() {
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
 
-
   // NEW: For success message
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -77,8 +76,6 @@ export default function Dashboard() {
       router.push('/login');
     }
   }, [router]);
-
-
 
   const openSaveModal = async () => {
     setNewUploadName('');
@@ -137,7 +134,6 @@ export default function Dashboard() {
     if (!response.ok) throw new Error('Failed to save (createNewUpload)');
     const data = await response.json();
     setSuccessMessage(`Upload saved successfully! Upload ID = ${data.upload_id}`);
-    // auto-hide after 3 seconds
     setTimeout(() => setSuccessMessage(''), 3000);
   }
 
@@ -162,10 +158,16 @@ export default function Dashboard() {
   // --------------------------------
   const handleLoadProgress = async () => {
     try {
-      const response = await fetch('/api/sessions');
+      // Get the actual user ID from localStorage
+      const userId = localStorage.getItem('userId') || '';
+      const response = await fetch('/api/sessions', {
+        headers: {
+          'x-user-id': userId
+        }
+      });
       if (!response.ok) throw new Error('Failed to load session');
       const data = await response.json();
-      if (!data.session_data) {
+      if (!data.session_data || Object.keys(data.session_data).length === 0) {
         alert('No session data found.');
         return;
       }
@@ -234,14 +236,12 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
-         {/* If successMessage is set, show a nice success banner */}
-         {successMessage && (
+        {successMessage && (
           <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
             {successMessage}
           </div>
         )}
 
-        {/* FOLDER UPLOAD & DISCLAIMER */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div
             {...getRootProps()}
@@ -250,14 +250,18 @@ export default function Dashboard() {
             }`}
           >
             <input {...getInputProps()} />
-            <p className="text-gray-600">{isDragActive ? 'Drop ZIP file here' : 'Drag and drop a ZIP file or click to select'}</p>
+            <p className="text-gray-600">
+              {isDragActive ? 'Drop ZIP file here' : 'Drag and drop a ZIP file or click to select'}
+            </p>
           </div>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex gap-2">
               <input
                 type="file"
                 id="folder-upload"
-                ref={(input) => { if (input) input.webkitdirectory = true; }}
+                ref={(input) => {
+                  if (input) input.webkitdirectory = true;
+                }}
                 onChange={(e) => {
                   if (!e.target.files) return;
                   processFolder(e.target.files);
@@ -282,7 +286,7 @@ export default function Dashboard() {
             </small>
           </div>
         </div>
-        {/* FILE TREE & ANALYSIS */}
+
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <div className="mb-4 flex items-center justify-between">
@@ -364,7 +368,7 @@ export default function Dashboard() {
             />
           </div>
         )}
-        {/* PREVIEW & EXTRACTED TEXT */}
+
         {selectedFile && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h3 className="text-lg font-semibold mb-4">{selectedFile.name}</h3>
@@ -419,7 +423,7 @@ export default function Dashboard() {
             )}
           </div>
         )}
-        {/* CONTEXT SELECTION */}
+
         <div className="mb-4 flex items-center gap-4">
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
@@ -462,7 +466,7 @@ export default function Dashboard() {
             </label>
           </div>
         </div>
-        {/* CHAT */}
+
         <div className="mt-8 border-t pt-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
             <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
