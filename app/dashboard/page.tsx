@@ -17,7 +17,8 @@ import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
 const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
 export default function Dashboard() {
-  
+
+  const [currentZipName, setCurrentZipName] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [contextType, setContextType] = useState<  'none' | 'local' | 'global'>('none');
@@ -35,25 +36,78 @@ export default function Dashboard() {
 
   const handleSaveProgress = async () => {
     try {
-      // Send fileTree, extractedTexts, summaries, chatHistory to the API
-      const response = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileTree,
-          extractedTexts,
-          summaries,
-          chatHistory,
-        }),
-      });
-      if (!response.ok) throw new Error('Failed to save session');
-      const data = await response.json();
-      alert('Session saved successfully! Session ID = ' + data.session_id);
+      // 1. Get existing uploads so user can choose “append to existing” or “new”
+      const existingUploadsRes = await fetch('/api/uploads'); // Suppose GET returns { uploads: [...] }
+      const existingUploadsData = await existingUploadsRes.json();
+      const existingUploads = existingUploadsData.uploads || [];
+  
+      // 2. Simple approach: ask user if they want to "create new" or select existing ID
+      // In production, a nice modal or form is better. Here, we do a quick prompt:
+  
+      const choice = window.prompt(
+        "Type a new name, or enter the ID of an existing upload to update.\n" +
+        "Existing uploads:\n" +
+        existingUploads.map((u: { upload_id: number; upload_name: string }) => `ID=${u.upload_id}, name="${u.upload_name}"`).join('\n')
+      );
+  
+      if (!choice) {
+        alert("Cancelled saving.");
+        return;
+      }
+  
+      // If the user typed a number that matches an existing ID, we treat it as "update"
+      // Otherwise, we treat it as a new name
+      const existing = existingUploads.find((u: { upload_id: number; upload_name: string }) => String(u.upload_id) === choice);
+      if (existing) {
+        // => Update existing
+        await updateExistingUpload(existing.upload_id);
+      } else {
+        // => Create new
+        const newName = choice; // user typed a custom name
+        await createNewUpload(newName);
+      }
+  
     } catch (error) {
-      console.error('Error saving session:', error);
-      alert('Error saving session: ' + (error as Error).message);
+      console.error('Error in handleSaveProgress:', error);
+      alert('Error saving data: ' + (error as Error).message);
     }
   };
+
+  async function createNewUpload(uploadName: string) {
+    // same POST logic as before, but pass "uploadName"
+    const response = await fetch('/api/uploads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileTree,
+        extractedTexts,
+        summaries,
+        chatHistory,
+        uploadName,
+      }),
+    });
+    if (!response.ok) throw new Error('Failed to save (createNewUpload)');
+    const data = await response.json();
+    alert('Upload saved successfully! Upload ID = ' + data.upload_id);
+  }
+
+  
+async function updateExistingUpload(uploadId: number) {
+  // A new route or method that updates an existing upload
+  const response = await fetch(`/api/uploads/${uploadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileTree,
+      extractedTexts,
+      summaries,
+      chatHistory,
+    }),
+  });
+  if (!response.ok) throw new Error('Failed to update existing upload');
+  const data = await response.json();
+  alert('Upload updated successfully with ID = ' + data.upload_id);
+}
 
    // Add a function to LOAD progress:
    const handleLoadProgress = async () => {
@@ -163,6 +217,7 @@ export default function Dashboard() {
   // ZIP UPLOAD PROCESSING
   // ======================
   const processZip = async (file: File) => {
+    setCurrentZipName(file.name.replace('.zip','')); // store the base name
     const zip = new JSZip();
     const zipContent = await zip.loadAsync(file);
     const files = await Promise.all(
