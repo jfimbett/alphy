@@ -14,6 +14,7 @@ export interface FileNode {
   selected?: boolean;
   base64Data?: string;
   mimeType?: string;
+  localPath?: string;
 }
 
 interface FileTreeProps {

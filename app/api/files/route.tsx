@@ -22,10 +22,10 @@ export async function POST(request: Request) {
       const buffer = Buffer.from(await file.arrayBuffer());
       const result = await client.query(
         `INSERT INTO files 
-         (user_id, file_name, file_type, file_data) 
-         VALUES ($1, $2, $3, $4)
+         (user_id, file_name, file_type, file_data, session_id)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING file_id`,
-        [userId, file.name, file.type, buffer]
+         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
       );
       insertedFiles.push(result.rows[0].file_id);
     }

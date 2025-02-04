@@ -1,0 +1,2442 @@
+File: app/dashboard\page.tsx
+----------------------------------------
+'use client';
+import { useRef, useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import FileTree, { FileNode } from '@/components/FileTree';
+import { ChatMessage } from '@/components/ChatMessage';
+import { SummaryContent } from '@/components/SummaryContent';
+import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
+import { useFileProcessing } from './useFileProcessing';
+import { useChat } from './useChat';
+import { useDropzone } from 'react-dropzone';
+import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { SessionSummary } from '@/app/history/page';
+
+type ExistingUpload = {
+  upload_id: number;
+  upload_name: string;
+};
+
+export default function Dashboard() {
+  const router = useRouter();
+
+  const {
+    fileTree,
+    setFileTree,
+    extractedTexts,
+    setExtractedTexts,
+    summaries,
+    setSummaries,
+    isAnalyzing,
+    processingPhase,
+    progress,
+    totalFiles,
+    processedFiles,
+    processZip,
+    processFolder,
+    analyzeFiles,
+    toggleAllFiles,
+    saveHeavyData
+  } = useFileProcessing();
+
+  const {
+    contextType,
+    setContextType,
+    chatMessage,
+    setChatMessage,
+    chatHistory,
+    setChatHistory,
+    isChatLoading,
+    handleChatSubmit
+  } = useChat();
+
+  const [currentZipName, setCurrentZipName] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
+  const [showExtracted, setShowExtracted] = useState(false);
+  const [allSelected, setAllSelected] = useState(true);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
+  const [successMessage, setSuccessMessage] = useState('');
+
+  // ---------------------
+  // SAVE PROGRESS MODAL
+  // ---------------------
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
+  const [selectedUploadOption, setSelectedUploadOption] = useState<'new' | 'existing'>('new');
+  const [newUploadName, setNewUploadName] = useState('');
+  const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
+  const [fetchingUploads, setFetchingUploads] = useState(false);
+
+
+  const [showLoadModal, setShowLoadModal] = useState(false);
+  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
+
+  // New load handler
+  const handleLoadClick = async () => {
+    try {
+      const res = await fetch('/api/sessions', {
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
+      });
+      const data = await res.json();
+      setAvailableSessions(data.sessions);
+      setShowLoadModal(true);
+    } catch {
+      alert('Error loading sessions');
+    }
+  };
+
+  // Updated load confirmation
+  const confirmLoadSession = async (sessionId: string) => {
+    try {
+      const userId = localStorage.getItem('userId');
+      if (!userId) {
+        router.push('/login');
+        return;
+      }
+
+      const response = await fetch('/api/sessions', {
+        headers: { 'x-user-id': userId }
+      });
+      
+      if (!response.ok) throw new Error('Failed to load session');
+      const data = await response.json();
+
+      if (!data.sessions || data.sessions.length === 0) {
+        alert('No session data found.');
+        return;
+      }
+
+      setCurrentSessionId(sessionId);
+
+      // 2) Fetch heavy data
+      const heavyRes = await fetch(
+        `/api/store-heavy-data?sessionId=${sessionId}`
+      );
+      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
+      const heavyData = await heavyRes.json();
+
+      // 3) Rebuild the fileTree from base64
+      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
+      setFileTree(rebuiltTree);
+
+      // 4) Also restore chat history, extracted texts, summaries
+      setChatHistory(heavyData.chatHistory || []);
+      setExtractedTexts(heavyData.extractedTexts || {});
+      setSummaries(heavyData.summaries || {});
+    } catch (error) {
+      console.error('Error loading session:', error);
+      alert('Error loading session: ' + (error as Error).message);
+    }
+  };
+
+  // print to console the variables not used for now
+  console.log(fetchingUploads, existingUploadId, selectedUploadOption, existingUploads, currentSessionId, currentZipName);
+
+  // On mount, check if user is logged in
+  useEffect(() => {
+    const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    if (!userId) {
+      router.push('/login');
+    }
+  }, [router]);
+
+  // --------------------------------
+  // Open/Close "Save Session" Modal
+  // --------------------------------
+  const openSaveModal = async () => {
+    setNewUploadName('');
+    setExistingUploadId(null);
+    setSelectedUploadOption('new');
+    try {
+      setFetchingUploads(true);
+      const res = await fetch('/api/uploads', {
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
+      });
+      if (!res.ok) throw new Error('Failed to fetch existing uploads');
+      const data = await res.json();
+      setExistingUploads(data.uploads || []);
+    } catch (err) {
+      console.error('Error fetching uploads:', err);
+      setExistingUploads([]);
+    } finally {
+      setFetchingUploads(false);
+      setShowSaveModal(true);
+    }
+  };
+  const closeSaveModal = () => {
+    setShowSaveModal(false);
+  };
+
+  // --------------------------------
+  // Actually "Save Session"
+  // --------------------------------
+  const handleSaveConfirm = async () => {
+    try {
+      await saveSession();
+      setShowSaveModal(false);
+    } catch (error) {
+      console.error('Error in handleSaveConfirm:', error);
+      alert('Error saving data: ' + (error as Error).message);
+    }
+  };
+
+  async function saveSession(): Promise<string> {
+    // 1) Convert rawData -> base64
+    const fileTreeWithBase64 = addBase64ToTree(fileTree);
+    console.log('fileTreeWithBase64', fileTreeWithBase64);
+    // 2) Create a minimal session row in DB (or skip if you prefer)
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': localStorage.getItem('userId') || ''
+      },
+      body: JSON.stringify({
+        sessionName: newUploadName.trim()
+      })
+    });
+    if (!res.ok) throw new Error('Failed to save session');
+    const data = await res.json();
+    setCurrentSessionId(data.session_id);
+  
+    // 3) Store heavy data (fileTree, chatHistory, extracted, summaries)
+    await saveHeavyData(data.session_id);
+  
+    setSuccessMessage('Session saved successfully!');
+    setTimeout(() => setSuccessMessage(''), 5000);
+  
+    return data.session_id;
+  }
+
+
+
+  // Helper to convert base64 -> rawData
+  function convertTree(nodes: FileNode[], sessionId: number | string): FileNode[] {
+    return nodes.map((node) => {
+      if (node.type === 'folder' && node.children) {
+        return { ...node, children: convertTree(node.children, sessionId) };
+      }
+
+
+      // If it's a file, handle base64 => rawData and also localPath => node.content
+      if (node.type === "file") {
+        // 1) If there's base64Data, convert to rawData
+        if (node.base64Data) {
+          const binaryString = atob(node.base64Data);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          node.rawData = bytes.buffer;
+          node.base64Data = undefined; // free it up
+        }
+
+        // 2) If there's a localPath (meaning we wrote this file to disk),
+        // build the route for inline preview
+        if (node.localPath) {
+          // e.g. "/api/session-file?sessionId=123&filePath=files/someFile.pdf"
+          node.content = `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(
+            node.localPath?.replace(/^files\//, '') || '' // Remove 'files/' prefix if present
+          )}`;
+        }
+      }
+      return node;
+      });
+      }
+
+  // The addBase64ToTree function from your code, ensuring each file node has base64Data
+function addBase64ToTree(nodes: FileNode[]): FileNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'folder' && node.children) {
+      return { ...node, children: addBase64ToTree(node.children) };
+    }
+    if (node.type === 'file' && node.rawData) {
+      const uint8 = new Uint8Array(node.rawData);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Data = btoa(binary);
+      return { ...node, base64Data };
+    }
+    return node;
+  });
+}
+
+  // --------------------------------
+  // FILE SELECTION / HELPERS
+  // --------------------------------
+  const handleFileSelect = (node: FileNode) => {
+    if (node.type === 'folder') return;
+    setSelectedFile(node);
+  };
+  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
+    return nodes.flatMap((node) => {
+      if (node.type === 'folder' && node.children) {
+        return getAllFiles(node.children);
+      }
+      return node.type === 'file' ? [node] : [];
+    });
+  };
+
+  // --------------------------------
+  // DROPZONE
+  // --------------------------------
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: async (acceptedFiles) => {
+      const zipFile = acceptedFiles.find((file) => file.name.endsWith('.zip'));
+      if (zipFile) {
+        setCurrentZipName(zipFile.name.replace('.zip', ''));
+        await processZip(zipFile);
+      }
+    },
+    accept: { 'application/zip': ['.zip'] },
+    multiple: false
+  });
+
+  return (
+    <div className="min-h-screen bg-gray-50 relative">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Success Message */}
+        {successMessage && (
+          <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
+            {successMessage}
+          </div>
+        )}
+
+        {/* Drag & Drop / Folder Upload */}
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div
+            {...getRootProps()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer ${
+              isDragActive ? 'border-blue-600 bg-blue-50' : 'border-gray-300'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <p className="text-gray-600">
+              {isDragActive ? 'Drop ZIP file here' : 'Drag and drop a ZIP file or click to select'}
+            </p>
+          </div>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+            <div className="flex gap-2">
+              <input
+                type="file"
+                id="folder-upload"
+                ref={(input) => {
+                  if (input) input.webkitdirectory = true;
+                }}
+                onChange={(e) => {
+                  if (!e.target.files) return;
+                  processFolder(e.target.files);
+                }}
+                className="hidden"
+              />
+              <button
+                onClick={() => document.getElementById('folder-upload')?.click()}
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+              >
+                Upload Folder
+              </button>
+              <button
+                onClick={handleLoadClick}
+                className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
+              >
+                Load Progress
+              </button>
+            </div>
+            <small className="text-gray-500">
+              Your browser may show a brief warning when uploading a folder. This is normal.
+            </small>
+          </div>
+        </div>
+
+        {/* If we have a file tree, show Analyze + Save Buttons */}
+        {fileTree.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={analyzeFiles}
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+                  disabled={isAnalyzing}
+                >
+                  {isAnalyzing ? 'Analyzing...' : 'Analyze Files'}
+                </button>
+                <button
+                  onClick={openSaveModal}
+                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors"
+                >
+                  Save Progress
+                </button>
+              </div>
+              <div className="flex items-center space-x-4">
+                <button
+                  onClick={() => {
+                    toggleAllFiles(!allSelected);
+                    setAllSelected(!allSelected);
+                  }}
+                  className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
+                >
+                  {allSelected ? 'Deselect All' : 'Select All'}
+                </button>
+                <span className="text-sm text-gray-600">
+                  {getAllFiles(fileTree).filter((f) => f.selected).length} files selected
+                </span>
+              </div>
+              {isAnalyzing && (
+                <div className="flex flex-col items-end space-y-2 ml-4">
+                  <div className="w-64 bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <span className="text-sm text-gray-600">
+                    {processingPhase === 'extracting' &&
+                      `Converting files to text: ${processedFiles}/${totalFiles} (${progress}%)`}
+                    {processingPhase === 'summarizing' &&
+                      `Summarizing files: ${processedFiles}/${totalFiles} (${progress}%)`}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Actual File Tree */}
+            <FileTree
+              nodes={fileTree}
+              onSelect={handleFileSelect}
+              selectedFile={selectedFile}
+              onToggleConversion={(path) => {
+                const updateNodes = (nodes: FileNode[]): FileNode[] =>
+                  nodes.map((n) => ({
+                    ...n,
+                    selected: n.fullPath === path ? !n.selected : n.selected,
+                    children: n.children ? updateNodes(n.children) : undefined
+                  }));
+                setFileTree((prev) => updateNodes(prev));
+              }}
+              onToggleHighlight={(path) => {
+                const newHighlighted = new Set(highlightedFiles);
+                if (newHighlighted.has(path)) {
+                  newHighlighted.delete(path);
+                } else {
+                  newHighlighted.add(path);
+                }
+                setHighlightedFiles(newHighlighted);
+
+                const updateNodes = (nodes: FileNode[]): FileNode[] =>
+                  nodes.map((n) => ({
+                    ...n,
+                    highlighted: newHighlighted.has(n.fullPath!),
+                    children: n.children ? updateNodes(n.children) : undefined
+                  }));
+                setFileTree(updateNodes(fileTree));
+              }}
+            />
+          </div>
+        )}
+
+        {/* Selected File Panel */}
+        {selectedFile && (
+          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4">{selectedFile.name}</h3>
+            <div className="mb-8">
+              <h4 className="text-sm font-medium text-gray-600 mb-2">File Preview</h4>
+              {selectedFile.name.toLowerCase().endsWith('.pdf') ? (
+                <iframe
+                  src={selectedFile.content}
+                  className="w-full h-96 border rounded-lg"
+                  title="PDF Preview"
+                />
+              ) : selectedFile.name.toLowerCase().match(/\.(xlsx|xls)$/) ? (
+                <p>Excel preview not supported directly in the browser.</p>
+              ) : (
+                <p>Preview not available for this file type</p>
+              )}
+            </div>
+
+            {/* Extracted Text Section */}
+            {extractedTexts[selectedFile.fullPath || ''] && (
+              <div>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-gray-800 mb-2">Extracted Text</h4>
+                  <button
+                    onClick={() => setShowExtracted((prev) => !prev)}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    {showExtracted ? 'Hide' : 'Show'} Extracted Text
+                  </button>
+                </div>
+                {showExtracted && (
+                  <div className="border p-3 rounded bg-gray-50 text-sm text-gray-800">
+                    <ExtractedTextContent content={extractedTexts[selectedFile.fullPath || '']} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Summaries Section */}
+            {summaries[selectedFile.fullPath || ''] && (
+              <div className="mt-8 border-t pt-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm mr-2">
+                    AI Summary
+                  </span>
+                  Key Insights
+                </h4>
+                <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                  <SummaryContent content={summaries[selectedFile.fullPath || '']} />
+                  <div className="mt-4 flex items-center text-sm text-green-700">
+                    <InformationCircleIcon className="w-4 h-4 mr-1" />
+                    Summary generated by AI - verify against original documents
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Radio Buttons for Chat Context */}
+        <div className="mb-4 flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+              <input
+                type="radio"
+                checked={contextType === 'none'}
+                onChange={() => setContextType('none')}
+                className="w-4 h-4"
+              />
+              <span className="flex items-center gap-1">
+                No Context
+                <span className="text-gray-500 text-xs">(Question only)</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+              <input
+                type="radio"
+                checked={contextType === 'local'}
+                onChange={() => setContextType('local')}
+                className="w-4 h-4"
+              />
+              <span className="flex items-center gap-1">
+                Local Context
+                <span className="text-gray-500 text-xs">(Current file only)</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-1 text-sm font-medium text-gray-700 ml-4">
+              <input
+                type="radio"
+                checked={contextType === 'global'}
+                onChange={() => setContextType('global')}
+                className="w-4 h-4"
+              />
+              <span className="flex items-center gap-1">
+                Global Context
+                <span className="text-gray-500 text-xs">
+                  ({getAllFiles(fileTree).filter((f) => f.selected).length} files selected)
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* Chat Section */}
+        <div className="mt-8 border-t pt-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
+            <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
+              Ask Me Anything
+            </span>
+            About This File
+          </h3>
+          <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
+            {chatHistory.map((msg, idx) => (
+              <ChatMessage key={idx} role={msg.role} content={msg.content} />
+            ))}
+          </div>
+          <form
+            ref={formRef}
+            onSubmit={(e) =>
+              handleChatSubmit({
+                e,
+                selectedFileText: extractedTexts[selectedFile?.fullPath || ''],
+                globalContext: Array.from(highlightedFiles)
+                  .map((path) => extractedTexts[path])
+                  .join('\n\n')
+              })
+            }
+            className="flex gap-2 text-gray-600"
+          >
+            <textarea
+              value={chatMessage}
+              onChange={(e) => setChatMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  formRef.current?.requestSubmit();
+                }
+              }}
+              className="flex-1 p-2 border rounded-lg"
+              placeholder="Ask a question about this file..."
+              rows={2}
+              disabled={isChatLoading}
+            />
+            <button
+              type="submit"
+              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              disabled={isChatLoading}
+            >
+              {isChatLoading ? 'Sending...' : 'Ask'}
+            </button>
+          </form>
+        </div>
+
+        {/* SAVE PROGRESS MODAL */}
+        {showSaveModal && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
+            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800">Save Session</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Session Name:
+                  </label>
+                  <input
+                    type="text"
+                    className="border border-gray-300 rounded w-full p-2 text-gray-800"
+                    value={newUploadName}
+                    onChange={(e) => setNewUploadName(e.target.value)}
+                    placeholder="Enter a session name..."
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end space-x-2">
+                <button
+                  onClick={closeSaveModal}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveConfirm}
+                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                >
+                  Save Session
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showLoadModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white p-6 rounded-lg max-w-md w-full">
+            <h3 className="text-xl font-bold mb-4">Select Session</h3>
+            {availableSessions.map(session => (
+              <div key={session.session_id} 
+                  className="p-3 hover:bg-gray-100 cursor-pointer"
+                  onClick={() => confirmLoadSession(session.session_id.toString())}>
+                <p>{session.session_name}</p>
+                <small>{new Date(session.created_at).toLocaleDateString()}</small>
+              </div>
+            ))}
+            <button onClick={() => setShowLoadModal(false)} className="mt-4">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: app/dashboard\useChat.tsx
+----------------------------------------
+'use client';
+import { useState } from 'react';
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+export type ContextType = 'none' | 'local' | 'global';
+
+export function useChat() {
+  const [contextType, setContextType] = useState<ContextType>('none');
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+
+  // Submit chat to your LLM
+  const handleChatSubmit = async ({
+    e,
+    selectedFileText,
+    globalContext,
+  }: {
+    e: React.FormEvent;
+    selectedFileText: string | undefined;
+    globalContext: string | undefined;
+  }) => {
+    e.preventDefault();
+    if (!chatMessage.trim()) return;
+
+    setIsChatLoading(true);
+    const newHistory = [...chatHistory, { role: 'user', content: chatMessage }];
+
+    try {
+      let context = '';
+      if (contextType === 'local' && selectedFileText) {
+        context = selectedFileText;
+      } else if (contextType === 'global' && globalContext) {
+        // Example: limit the length if needed
+        context = globalContext.slice(0, 5000);
+      }
+
+      const promptWithContext = context
+        ? chatMessage + '\n\nContext:\n\n' + context
+        : chatMessage;
+
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptWithContext }),
+      });
+
+      if (!res.ok) throw new Error('Chat failed');
+      const data = await res.json();
+
+      setChatHistory([
+        ...newHistory,
+        { role: 'assistant', content: data.content },
+      ]);
+      setChatMessage('');
+    } catch (error) {
+      console.error('Chat Error:', error);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  return {
+    contextType,
+    setContextType,
+    chatMessage,
+    setChatMessage,
+    chatHistory,
+    setChatHistory,
+    isChatLoading,
+    handleChatSubmit,
+  };
+}
+
+----------------------------------------
+
+File: app/dashboard\useFileProcessing.tsx
+----------------------------------------
+'use client';
+import { useState } from 'react';
+import JSZip from 'jszip';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import * as XLSX from 'xlsx';
+import { TextItem } from 'pdfjs-dist/types/src/display/api';
+import { FileNode } from '@/components/FileTree';
+
+// IMPORTANT: pdf.js worker config
+GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
+
+const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
+
+interface FilePayload {
+  path: string;
+  base64Data: string; // We'll store file data as base64 from the start
+  blobUrl: string;
+}
+
+// Helper to convert ArrayBuffer to base64
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// Helper to decode base64 back to ArrayBuffer
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const len = binary.length;
+  const buffer = new ArrayBuffer(len);
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return buffer;
+}
+
+export function useFileProcessing() {
+  const [fileTree, setFileTree] = useState<FileNode[]>([]);
+  const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
+  const [summaries, setSummaries] = useState<Record<string, string>>({});
+
+  // For progress indicators
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [processingPhase, setProcessingPhase] = useState<'extracting' | 'summarizing' | 'idle'>('idle');
+  const [progress, setProgress] = useState(0);
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [processedFiles, setProcessedFiles] = useState(0);
+
+  // ======================
+  // Build File Tree
+  // ======================
+  const buildFileTree = (files: FilePayload[]): FileNode[] => {
+    const root: FileNode = { name: '', type: 'folder', children: [] };
+
+    files.forEach(({ path, base64Data, blobUrl }) => {
+      const parts = path.split('/');
+      let current = root;
+      const pathSegments: string[] = [];
+
+      parts.forEach((part, i) => {
+        if (!part) return;
+        pathSegments.push(part);
+
+        const existing = current.children?.find((n) => n.name === part);
+        if (existing) {
+          current = existing;
+        } else {
+          const isFile = i === parts.length - 1;
+          const newNode: FileNode = {
+            name: part,
+            type: isFile ? 'file' : 'folder',
+            children: isFile ? undefined : [],
+            // Store base64 in node.base64Data
+            base64Data: isFile ? base64Data : undefined,
+            // content for preview
+            content: isFile ? blobUrl : undefined,
+            // We no longer store rawData to avoid detachment
+            fullPath: pathSegments.join('/'),
+          };
+          if (!current.children) current.children = [];
+          current.children.push(newNode);
+          current = newNode;
+
+          // Default to selected
+          if (isFile) {
+            newNode.selected = true;
+          }
+        }
+      });
+    });
+
+    return root.children || [];
+  };
+
+  // ======================
+  // ZIP UPLOAD PROCESSING
+  // ======================
+  const processZip = async (file: File) => {
+    const zip = new JSZip();
+    const zipContent = await zip.loadAsync(file);
+
+    const files = await Promise.all(
+      Object.values(zipContent.files)
+        .filter((entry) => !entry.dir)
+        .map(async (entry) => {
+          // 1) Get raw arraybuffer
+          const data = await entry.async('arraybuffer');
+          // 2) Immediately convert to base64
+          const base64Data = arrayBufferToBase64(data);
+          // 3) For browser preview
+          const blobUrl = URL.createObjectURL(new Blob([data]));
+          return {
+            path: entry.name,
+            base64Data,
+            blobUrl,
+          };
+        })
+    );
+
+    setFileTree(buildFileTree(files));
+  };
+
+  // ======================
+  // FOLDER UPLOAD
+  // ======================
+  const processFolder = async (fileList: FileList) => {
+    const filePromises = Array.from(fileList).map((file) => {
+      return new Promise<FilePayload>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (reader.result && typeof reader.result !== 'string') {
+            // Convert arraybuffer to base64
+            const base64Data = arrayBufferToBase64(reader.result);
+            const blobUrl = URL.createObjectURL(file);
+            resolve({
+              path: file.webkitRelativePath,
+              base64Data,
+              blobUrl,
+            });
+          } else {
+            reject(new Error('Failed to read file as ArrayBuffer'));
+          }
+        };
+        reader.onerror = (err) => reject(err);
+        reader.readAsArrayBuffer(file);
+      });
+    });
+
+    try {
+      const files = await Promise.all(filePromises);
+      setFileTree(buildFileTree(files));
+    } catch (err) {
+      console.error('Error reading folder files:', err);
+    }
+  };
+
+  // Helper: get all files in a tree
+  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
+    return nodes.flatMap((node) => {
+      if (node.type === 'folder' && node.children) {
+        return getAllFiles(node.children);
+      }
+      return node.type === 'file' ? [node] : [];
+    });
+  };
+
+  // ======================
+  // ANALYZE FILES
+  // ======================
+  const analyzeFiles = async () => {
+    try {
+      const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
+
+      // Phase 1: Extract text
+      setProcessingPhase('extracting');
+      setIsAnalyzing(true);
+      setProgress(0);
+      setProcessedFiles(0);
+
+      const total = allFiles.length;
+      setTotalFiles(total);
+
+      const newExtractedTexts: Record<string, string> = {};
+      let processedCount = 0;
+
+      for (const node of allFiles) {
+        let extracted = '';
+
+        // If for some reason it's missing base64Data, skip
+        if (!node.base64Data) continue;
+
+        // Decode to ArrayBuffer for PDF or XLSX
+        const arrayBuffer = base64ToArrayBuffer(node.base64Data);
+
+        // PDF Extraction
+        if (node.name.toLowerCase().endsWith('.pdf')) {
+          try {
+            const data = new Uint8Array(arrayBuffer);
+            const pdf = await getDocument({ data }).promise;
+            let text = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const content = await page.getTextContent();
+              text += content.items
+                .filter((item): item is TextItem => 'str' in item)
+                .map((item: TextItem) => item.str)
+                .join(' ') + '\n';
+            }
+            extracted = text;
+          } catch (err) {
+            console.error(`Failed to extract text from ${node.name}`, err);
+            extracted = '[Error extracting PDF text]';
+          }
+        }
+        // Excel Extraction
+        else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
+          try {
+            const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+            let excelText = '';
+            workbook.SheetNames.forEach((sheetName) => {
+              const worksheet = workbook.Sheets[sheetName];
+              const sheetAsJson = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+              (sheetAsJson as (string | number | boolean | null)[][]).forEach((row) => {
+                excelText += row.join(' ') + '\n';
+              });
+              excelText += '\n';
+            });
+            extracted = excelText;
+          } catch (err) {
+            console.error(`Failed to extract text from ${node.name}`, err);
+            extracted = '[Error extracting Excel text]';
+          }
+        }
+        // Other file types
+        else {
+          extracted = '[Text extraction not available for this file type]';
+        }
+
+        newExtractedTexts[node.fullPath!] = extracted.trim().replace(/\s+/g, ' ');
+
+        processedCount++;
+        setProcessedFiles(processedCount);
+        setProgress(Math.round((processedCount / total) * 100));
+      }
+
+     
+
+
+      setExtractedTexts(newExtractedTexts);
+
+      // Phase 2: Summarization
+      setProcessingPhase('summarizing');
+      setProgress(0);
+      setProcessedFiles(0);
+
+      const newSummaries: Record<string, string> = {};
+      let summaryCount = 0;
+      const textEntries = Object.entries(newExtractedTexts);
+
+      for (const [fullPath, text] of textEntries) {
+        try {
+          const prompt = `Summarize the following text in one paragraph,
+focusing on key financial metrics, risks, and opportunities.
+Recall that the text could be written in different languages other than English.\n\n${text}`;
+
+          if (DEVELOPMENT) {
+            newSummaries[fullPath] = 'Some random text for development purposes...';
+          } else {
+            const res = await fetch('/api/llm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt,
+                context: text.substring(0, 2000) || '',
+                history: [],
+              }),
+            });
+
+            if (!res.ok) {
+              newSummaries[fullPath] = 'Summary failed: API error';
+            } else {
+              const data = await res.json();
+              newSummaries[fullPath] = data.content;
+            }
+          }
+        } catch (error) {
+          newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
+        }
+
+        summaryCount++;
+        setProcessedFiles(summaryCount);
+        setProgress(Math.round((summaryCount / textEntries.length) * 100));
+      }
+
+      setSummaries(newSummaries);
+    } catch (error) {
+      console.error('Processing error:', error);
+    } finally {
+      setIsAnalyzing(false);
+      setProcessingPhase('idle');
+    }
+  };
+
+  // ======================
+  // SELECT/DESELECT ALL
+  // ======================
+  const toggleAllFiles = (selected: boolean) => {
+    const updateNodes = (nodes: FileNode[]): FileNode[] =>
+      nodes.map((n) => ({
+        ...n,
+        selected: n.type === 'file' ? selected : n.selected,
+        children: n.children ? updateNodes(n.children) : undefined,
+      }));
+    setFileTree((prev) => updateNodes(prev));
+  };
+
+   // Example snippet after analysis completes OR on "Save Session":
+   async function saveHeavyData(sessionId: string) {
+    try {
+      const res = await fetch('/api/store-heavy-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          fileTree,        // <- from your state
+          extractedTexts,  // <- from your state
+          summaries,       // <- from your state
+        }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to save heavy data');
+      }
+      console.log('Heavy data saved successfully');
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  return {
+    fileTree,
+    setFileTree,
+    extractedTexts,
+    setExtractedTexts,
+    summaries,
+    setSummaries,
+    isAnalyzing,
+    processingPhase,
+    progress,
+    totalFiles,
+    processedFiles,
+    processZip,
+    processFolder,
+    analyzeFiles,
+    toggleAllFiles,
+    buildFileTree,
+    saveHeavyData, // <- Add this to your return object
+  };
+}
+
+----------------------------------------
+
+File: app/api\auth\login\route.tsx
+----------------------------------------
+'use server';
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import bcrypt from 'bcryptjs';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { email, password } = body;
+    if (!email || !password) {
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    }
+    const client = await pool.connect();
+    const userRes = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+    client.release();
+    if (userRes.rowCount === 0) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+    const user = userRes.rows[0];
+    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
+    if (!passwordMatch) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+    // Return user data (do not include the password hash)
+    const userData = { user_id: user.user_id, email: user.email };
+    return NextResponse.json({ success: true, user: userData }, { status: 200 });
+  } catch (error) {
+    console.error('Error in login:', error);
+    return NextResponse.json({ error: 'Error logging in' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\auth\signup\route.tsx
+----------------------------------------
+'use server';
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import bcrypt from 'bcryptjs';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { email, password, company, reason } = body;
+    if (!email || !password) {
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    }
+    const client = await pool.connect();
+    // Check if the user already exists
+    const userCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userCheck && userCheck.rowCount !== null && userCheck.rowCount > 0) {
+      client.release();
+      return NextResponse.json({ error: 'User already exists' }, { status: 400 });
+    }
+    // Hash the password
+    const salt = bcrypt.genSaltSync(10);
+    const password_hash = bcrypt.hashSync(password, salt);
+    // Insert new user
+    const result = await client.query(
+      `INSERT INTO users (email, password_hash, company, reason) 
+       VALUES ($1, $2, $3, $4) RETURNING user_id, email`,
+      [email, password_hash, company, reason]
+    );
+    client.release();
+    return NextResponse.json({ success: true, user: result.rows[0] }, { status: 200 });
+  } catch (error) {
+    console.error('Error in signup:', error);
+    return NextResponse.json({ error: 'Error signing up' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\files\route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+export async function POST(request: Request) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const formData = await request.formData();
+    const files = formData.getAll('files') as File[];
+    
+    if (!files || files.length === 0) {
+      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
+    }
+
+    const insertedFiles = [];
+    
+    for (const file of files) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const result = await client.query(
+        `INSERT INTO files 
+         (user_id, file_name, file_type, file_data, session_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING file_id`,
+         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
+      );
+      insertedFiles.push(result.rows[0].file_id);
+    }
+
+    return NextResponse.json({ success: true, fileIds: insertedFiles });
+  } catch (error) {
+    console.error('File upload error:', error);
+    return NextResponse.json({ error: 'File upload failed' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function GET() {
+  try {
+    const client = await pool.connect();
+    const result = await client.query(`SELECT * FROM files;`);
+    client.release();
+
+    return NextResponse.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: 'Error fetching files' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\files\[fileId]\route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+
+export async function GET(
+  request: Request,
+  { params }: { params: { fileId: string } }
+) {
+  const client = await pool.connect();
+  try {
+    const fileId = parseInt(params.fileId);
+    if (isNaN(fileId)) {
+      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
+    }
+
+    const result = await client.query(
+      `SELECT file_name, file_type, file_data 
+       FROM files 
+       WHERE file_id = $1`,
+      [fileId]
+    );
+
+    if (result.rowCount === 0) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+
+    const file = result.rows[0];
+    return new NextResponse(file.file_data, {
+      headers: {
+        'Content-Type': file.file_type,
+        'Content-Disposition': `attachment; filename="${file.file_name}"`
+      }
+    });
+  } catch (error) {
+    console.error('File download error:', error);
+    return NextResponse.json({ error: 'File download failed' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: { fileId: string } }
+) {
+  let client;
+  try {
+    client = await pool.connect();
+    const fileId = parseInt(params.fileId, 10);
+    if (isNaN(fileId)) {
+      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
+    }
+
+    // Remove any extractions for this file, then remove the file itself
+    await client.query('DELETE FROM extractions WHERE file_id = $1', [fileId]);
+    await client.query('DELETE FROM files WHERE file_id = $1', [fileId]);
+
+    client.release();
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    if (client) client.release();
+    return NextResponse.json({ error: 'Error deleting file' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\llm\route.ts
+----------------------------------------
+// app/api/llm/route.ts
+export const dynamic = 'force-dynamic'; // Required for streaming/async operations
+
+export async function POST(req: Request) {
+  const { prompt, context, history } = await req.json();
+
+  // Validate parameters
+  if (!prompt || typeof prompt !== 'string') {
+      return Response.json({ error: "Invalid prompt" }, { status: 400 });
+  }
+
+  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
+  if (DEVELOPMENT) {
+    console.log('Using mock LLM responses');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return Response.json({ 
+      content: "[MOCK RESPONSE] This is a development mock response...",
+      tokensUsed: 42
+    });
+  }
+
+
+  // Ensure history is an array and limit to last 2 messages
+  const limitedHistory = Array.isArray(history) 
+  ? history.slice(-2)
+  : [];
+
+  // Real implementation
+  try {
+    const res = await fetch('http://localhost:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: "deepseek-r1:70b",
+        stream: false,
+        temperature: 0.0,
+        messages: [
+          { role: "system", content: context || "" }, // Handle undefined context
+          ...limitedHistory,
+          { role: "user", content: prompt }
+        ]
+      }),
+    });
+
+    if (!res.ok) throw new Error(`LLM API Error: ${res.statusText}`);
+    
+    const data = await res.json();
+    return Response.json({
+      content: data.message?.content || "",
+      tokensUsed: data.tokens_used || 0
+    });
+  } catch (error) {
+    console.error('LLM Processing Error:', error);
+    return Response.json(
+      { error: "LLM processing failed" },
+      { status: 500 }
+    );
+  }
+}
+----------------------------------------
+
+File: app/api\session-file\route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import mime from 'mime'; // install via `npm install mime` if you want to do more robust MIME detection
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const sessionId = searchParams.get('sessionId');
+    const filePath = searchParams.get('filePath');
+
+    if (!sessionId || !filePath) {
+      return NextResponse.json(
+        { error: 'Missing sessionId or filePath' },
+        { status: 400 }
+      );
+    }
+
+    // Construct the absolute path on disk
+    const absolutePath = path.join(
+      process.cwd(),
+      'data',
+      sessionId,
+      decodeURIComponent(filePath) // Add URI decoding
+    );
+
+    if (!fs.existsSync(absolutePath)) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+
+    // Read file from disk
+    const fileBuffer = fs.readFileSync(absolutePath);
+
+    // Infer MIME type from the filename extension, or fall back to octet-stream
+    const mimeType = mime.getType(absolutePath) || 'application/octet-stream';
+
+    const headers = {
+      'Content-Type': mimeType,
+      'Content-Disposition': `inline; filename="${path.basename(absolutePath)}"`,
+    };
+    // Add proper PDF content disposition
+    if (mimeType === 'application/pdf') {
+      headers['Content-Disposition'] = `inline; filename="${path.basename(absolutePath)}"`;
+    } else {
+      headers['Content-Disposition'] = `attachment; filename="${path.basename(absolutePath)}"`;
+    }
+
+    // Return the file bytes in the response
+    return new NextResponse(fileBuffer, {
+      headers: headers,
+    });
+  } catch (error) {
+    console.error('Error serving file:', error);
+    return NextResponse.json({ error: 'File serving error' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\sessions\route.tsx
+----------------------------------------
+// app/api/sessions/route.tsx
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+// app/api/sessions/route.tsx
+export async function GET(request: Request) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  
+
+    const result = await client.query(`
+      SELECT 
+        s.session_id,
+        s.session_name,
+        s.created_at,
+        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
+      FROM sessions s
+      WHERE s.user_id = $1
+      ORDER BY s.created_at DESC
+    `, [userId]);
+
+
+    
+    const sessions = result.rows.map((row) => ({
+      session_id: row.session_id,
+      session_name: row.session_name,
+      created_at: row.created_at,
+      file_count: row.file_count
+    }));
+
+    return NextResponse.json({ sessions });
+  } catch (error) {
+    console.error('Session load error:', error);
+    //alert(error);
+    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+
+
+export async function POST(request: Request) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { sessionName } = await request.json();
+
+
+    //columns  session_id | user_id | session_name | created_at | expires_at
+    const result = await client.query(`
+      INSERT INTO sessions (user_id, session_name)
+      VALUES ($1, $2)
+      RETURNING session_id, created_at
+    `, [userId, sessionName]);
+
+   
+    const sessionId = result.rows[0].session_id;
+
+    await client.query('COMMIT');
+    return NextResponse.json({
+      success: true,
+      session_id: sessionId,
+      created_at: result.rows[0].created_at
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Session save error:', error);
+    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+----------------------------------------
+
+File: app/api\sessions\[sessionId]\route.tsx
+----------------------------------------
+// app/api/sessions/[sessionId]/route.tsx
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+export async function GET(
+  request: Request,
+  { params }: { params: { sessionId: string } }
+) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const sId = parseInt(params.sessionId, 10);
+    if (isNaN(sId)) {
+      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
+    }
+
+    const res = await client.query(
+      `SELECT session_id, session_name, created_at
+         FROM sessions
+        WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    if (res.rowCount === 0) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const session = res.rows[0];
+    return NextResponse.json({ session });
+  } catch (error) {
+    console.error('Error fetching session:', error);
+    return NextResponse.json({ error: 'Error fetching session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: { sessionId: string } }
+) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const sId = parseInt(params.sessionId, 10);
+    if (isNaN(sId)) {
+      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
+    }
+    // Optionally, remove the session reference from files (set session_id to NULL)
+    await client.query(
+      `UPDATE files SET session_id = NULL WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    const deleteResult = await client.query(
+      `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    await client.query('COMMIT');
+    if (deleteResult.rowCount === 0) {
+      return NextResponse.json(
+        { error: 'Session not found or not authorized' },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error deleting session:', error);
+    return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+----------------------------------------
+
+File: app/api\store-heavy-data\route.tsx
+----------------------------------------
+// app/api/store-heavy-data/route.ts
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import { FileNode } from '@/components/FileTree';
+
+export async function POST(request: Request) {
+  try {
+    const { sessionId, heavyData } = await request.json();
+    if (!sessionId) {
+      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
+    }
+
+    // 1) Create the directory structure: data/sessionId/files
+    const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
+    const filesDir = path.join(dataDir, 'files');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(filesDir)) {
+      fs.mkdirSync(filesDir);
+    }
+
+    // 2) For each file node in fileTree, decode base64 -> raw file
+    function storeFilesRecursively(nodes: FileNode[]): FileNode[] {
+      return nodes.map((node, idx) => {
+        if (node.type === 'folder' && node.children) {
+          return { ...node, children: storeFilesRecursively(node.children) };
+        }
+        if (node.type === 'file' && node.base64Data) {
+          // decode base64
+          const buffer = Buffer.from(node.base64Data, 'base64');
+          // create a unique filename. You can also keep the original name if you prefer
+          // but we add idx or a timestamp to avoid collisions:
+          const safeName = node.name.replace(/[^\w\d.]+/g, '_');
+          const fileName = `file_${Date.now()}_${idx}_${safeName}`;
+          const filePath = path.join(filesDir, fileName);
+
+          // 3) Write the file to data/sessionId/files/
+          fs.writeFileSync(filePath, buffer);
+
+          // 4) Remove base64Data from the node, and add localPath
+          return {
+            ...node,
+            base64Data: undefined,
+            rawData: undefined,
+            localPath: `files/${fileName}`
+          };
+        }
+        return node;
+      });
+    }
+
+    // If there's a fileTree, store each file on disk
+    let updatedFileTree: FileNode[] = [];
+    if (heavyData.fileTree) {
+      updatedFileTree = storeFilesRecursively(heavyData.fileTree);
+    }
+
+    // 5) Overwrite heavyData.fileTree with the updated one
+    const finalHeavyData = {
+      ...heavyData,
+      fileTree: updatedFileTree
+    };
+
+    // 6) Write everything to heavyData.json
+    const filePath = path.join(dataDir, 'heavyData.json');
+    fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
+
+    return NextResponse.json({ success: true, filePath });
+  } catch (error) {
+
+    return NextResponse.json(
+      { error: 'Failed to save heavy data' + error },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const sessionId = searchParams.get('sessionId');
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
+  }
+
+  try {
+    const dataDir = path.join(process.cwd(), 'data', sessionId);
+    const filePath = path.join(dataDir, 'heavyData.json');
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json({ error: 'No heavyData found' }, { status: 404 });
+    }
+
+    const data = fs.readFileSync(filePath, 'utf-8');
+    return NextResponse.json(JSON.parse(data));
+  } catch (error) {
+    console.error('Error reading heavy data:', error);
+    return NextResponse.json({ error: 'Heavy data not found' }, { status: 404 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\test\route.tsx
+----------------------------------------
+// app/api/test/route.ts
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+export async function GET() {
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM files ORDER BY file_id;');
+    client.release();
+
+    return NextResponse.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching data', error);
+    return NextResponse.json({ error: 'Error fetching data' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api\uploads\route.tsx
+----------------------------------------
+// app/api/uploads/route.ts
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import { FileNode } from '@/components/FileTree';
+
+export async function GET(request: Request) {
+  const userId = request.headers.get('x-user-id');
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const client = await pool.connect();
+    // 1) Fetch all uploads for this user:
+    const uploadsResult = await client.query(`
+      SELECT upload_id, upload_name, created_at
+      FROM uploads
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `, [userId]);
+
+    const uploads = uploadsResult.rows;
+    client.release();
+    return NextResponse.json({ uploads });
+  } catch (error) {
+    console.error('Error fetching uploads:', error);
+    return NextResponse.json({ error: 'Error fetching uploads' }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  let client;
+  try {
+    client = await pool.connect();
+    const body = await request.json();
+    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
+
+    // 1) Validate user ID from headers
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // 2) Validate required fields
+    if (!uploadName) {
+      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
+    }
+
+    // 3) Create a new "upload" row
+    const insertUploadRes = await client.query(
+      `INSERT INTO uploads (user_id, upload_name)
+       VALUES ($1, $2)
+       RETURNING upload_id`,
+      [userId, uploadName]
+    );
+    const newUploadId = insertUploadRes.rows[0].upload_id;
+
+    // 4) Gather all files from the fileTree
+    const filesToInsert: Array<{
+      fullPath: string;
+      fileName: string;
+      fileDataBase64?: string;
+      mimeType: string;
+    }> = [];
+
+    function traverseTree(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === 'file') {
+          filesToInsert.push({
+            fullPath: node.fullPath || '',
+            fileName: node.name,
+            fileDataBase64: node.base64Data, // base64 string from the frontend
+            mimeType: node.mimeType || 'application/octet-stream'
+          });
+        }
+        if (node.children?.length) {
+          traverseTree(node.children);
+        }
+      }
+    }
+    traverseTree(fileTree || []);
+
+    // 5) Insert each file row + extraction if applicable
+    for (const file of filesToInsert) {
+      const fileDataBuffer = file.fileDataBase64
+        ? Buffer.from(file.fileDataBase64, 'base64')
+        : null;
+
+      // Insert a row in "files"
+      const insertFileRes = await client.query(
+        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING file_id`,
+        [
+          newUploadId,
+          file.fileName,
+          file.fullPath,
+          file.mimeType,
+          fileDataBuffer,
+          false
+        ]
+      );
+
+      const fileId = insertFileRes.rows[0].file_id;
+
+      // If there's text or summary, insert into "extractions"
+      const extractedText = extractedTexts?.[file.fullPath];
+      const summary = summaries?.[file.fullPath];
+      if (extractedText || summary) {
+        // Mark file as extracted
+        await client.query(
+          `UPDATE files SET is_extracted = TRUE WHERE file_id = $1`,
+          [fileId]
+        );
+
+        // Insert into "extractions"
+        await client.query(
+          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
+           VALUES ($1, $2, $3)`,
+          [fileId, extractedText || null, summary || null]
+        );
+      }
+    }
+
+    client.release();
+
+    // Return the upload_id and chatHistory (if any)
+    return NextResponse.json(
+      { upload_id: newUploadId, chatHistory },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error('Error creating new upload:', error);
+    if (client) client.release();
+    return NextResponse.json(
+      { error: 'Error creating new upload' },
+      { status: 500 }
+    );
+  }
+}
+
+----------------------------------------
+
+File: app/api\uploads\[uploadId]\route.tsx
+----------------------------------------
+
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import { FileNode } from '@/components/FileTree';
+
+
+export async function DELETE(request: Request,{ params }: { params: { uploadId: string } }) {
+  let client;
+  try {
+    client = await pool.connect();
+    const uploadId = parseInt(params.uploadId,10);
+    if(isNaN(uploadId)) {
+      return NextResponse.json({ error:'Invalid upload ID'},{ status:400 });
+    }
+    //1) Find all files for this upload
+    const fileRes = await client.query(
+      'SELECT file_id FROM files WHERE upload_id=$1',[uploadId]
+    );
+    const fileIds = fileRes.rows.map(r=>r.file_id);
+    //2) Delete extractions for these files
+    if(fileIds.length>0) {
+      await client.query(
+        'DELETE FROM extractions WHERE file_id=ANY($1)',
+        [fileIds]
+      );
+    }
+    //3) Delete files themselves
+    await client.query('DELETE FROM files WHERE upload_id=$1',[uploadId]);
+    //4) Finally delete the upload
+    await client.query('DELETE FROM uploads WHERE upload_id=$1',[uploadId]);
+    client.release();
+    return NextResponse.json({ success:true },{ status:200 });
+  } catch(error) {
+    console.error('Error deleting entire upload:',error);
+    if(client) client.release();
+    return NextResponse.json({ error:'Error deleting upload'},{ status:500 });
+  }
+}
+
+
+export async function PATCH(request: Request,{ params }: { params: { uploadId: string } }) {
+  let client;
+  try {
+    client = await pool.connect();
+    const uploadId = parseInt(params.uploadId, 10);
+    if (isNaN(uploadId)) {
+      return NextResponse.json({ error: 'Invalid upload ID' }, { status: 400 });
+    }
+
+    const body = await request.json();
+    const { fileTree, extractedTexts, summaries } = body;
+    const filesToInsert: Array<{
+      fullPath: string;
+      fileName: string;
+      fileDataBase64?: string;
+      mimeType: string;
+    }> = [];
+
+    function traverseTree(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === 'file') {
+          filesToInsert.push({
+            fullPath: node.fullPath || '',
+            fileName: node.name,
+            fileDataBase64: node.base64Data, // from front end
+            mimeType: node.mimeType || 'application/octet-stream'
+          });
+        }
+        if (node.children?.length) traverseTree(node.children);
+      }
+    }
+    traverseTree(fileTree);
+
+    // For each file, either insert or update
+    for (const file of filesToInsert) {
+      const existingFileRes = await client.query(
+        `SELECT file_id FROM files WHERE upload_id = $1 AND file_path = $2`,
+        [uploadId, file.fullPath]
+      );
+      let fileId: number;
+      if (existingFileRes.rowCount && existingFileRes.rowCount > 0) {
+        fileId = existingFileRes.rows[0].file_id;
+        // Potentially update file_data if new base64 data is provided
+        if (file.fileDataBase64) {
+          const fileDataBuffer = Buffer.from(file.fileDataBase64, 'base64');
+          await client.query(
+            `UPDATE files
+                SET file_data = $2, mime_type=$3
+              WHERE file_id = $1`,
+            [fileId, fileDataBuffer, file.mimeType]
+          );
+        }
+      } else {
+        // Insert new file row
+        const fileDataBuffer = file.fileDataBase64
+          ? Buffer.from(file.fileDataBase64, 'base64')
+          : null;
+        const insertRes = await client.query(
+          `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING file_id`,
+          [
+            uploadId,
+            file.fileName,
+            file.fullPath,
+            file.mimeType,
+            fileDataBuffer,
+            false
+          ]
+        );
+        fileId = insertRes.rows[0].file_id;
+      }
+
+      // Check if we have extraction for that path
+      const extractedText = extractedTexts[file.fullPath];
+      const summary = summaries[file.fullPath];
+      if (extractedText || summary) {
+        // Mark file as extracted
+        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id = $1`, [fileId]);
+        // Upsert extraction
+        const existingExtractRes = await client.query(
+          `SELECT extraction_id FROM extractions WHERE file_id=$1`,
+          [fileId]
+        );
+        if (existingExtractRes.rowCount && existingExtractRes.rowCount > 0) {
+          await client.query(
+            `UPDATE extractions
+                SET extracted_text=$2,
+                    summarized_text=$3,
+                    updated_at=NOW()
+              WHERE file_id=$1`,
+            [fileId, extractedText || null, summary || null]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO extractions (file_id, extracted_text, summarized_text)
+             VALUES ($1,$2,$3)`,
+            [fileId, extractedText || null, summary || null]
+          );
+        }
+      }
+    }
+
+    client.release();
+    return NextResponse.json({ success: true, message: 'Upload updated.' });
+  } catch (error) {
+    console.error('Error updating upload:', error);
+    if (client) client.release();
+    return NextResponse.json({ error: 'Error updating upload' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/history\page.tsx
+----------------------------------------
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { TrashIcon } from '@heroicons/react/24/outline';
+import Navbar from '@/components/Navbar';
+
+export interface SessionSummary {
+  session_id: number;
+  session_name: string;
+  created_at: string;
+  file_count: number;
+}
+
+export default function HistoryPage() {
+  const router = useRouter();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // Fetch user sessions on mount
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      // Not logged in
+      router.push('/login');
+      return;
+    }
+
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) {
+          setError(data.error);
+          return;
+        }
+        setSessions(data.sessions || []);
+      })
+      .catch((err) => {
+        setError(err.message || 'Error fetching sessions');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [router]);
+
+  // Delete a session
+  async function handleDeleteSession(sessionId: number) {
+    const userId = localStorage.getItem('userId') || '';
+    const confirmDelete = confirm('Are you sure you want to delete this session?');
+    if (!confirmDelete) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to delete session');
+      }
+
+      // Remove it from local state
+      setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+      alert('Session deleted successfully.');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert('Error deleting session: ' + err.message);
+      } else {
+        alert('Error deleting session');
+      }
+      console.error(err);
+    }
+  }
+
+  if (loading) {
+    return <div className="p-4">Loading sessions...</div>;
+  }
+
+  if (error) {
+    return <div className="p-4 text-red-600">Error: {error}</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800">Your Sessions</h1>
+        {sessions.length === 0 ? (
+          <p>No sessions found.</p>
+        ) : (
+          <ul className="space-y-4">
+            {sessions.map((session) => (
+              <li key={session.session_id} className="border p-4 rounded bg-white flex justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-600">
+                    {session.session_name}
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Created: {new Date(session.created_at).toLocaleString()}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    Files: {session.file_count}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* View Details */}
+                  <button
+                    onClick={() => router.push(`/history/${session.session_id}`)}
+                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    View Details
+                  </button>
+
+                  {/* Trash Icon => Delete Session */}
+                  <button
+                    onClick={() => handleDeleteSession(session.session_id)}
+                    className="p-2 hover:bg-red-50 rounded"
+                    title="Delete Session"
+                  >
+                    <TrashIcon className="w-5 h-5 text-red-600" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </main>
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: app/history\[sessionId]\page.tsx
+----------------------------------------
+// app/history/[sessionId]/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import Footer from '@/components/Footer';
+import ReactJson from 'react-json-view';
+import * as XLSX from 'xlsx';
+import { FileNode } from '@/components/FileTree';
+
+// Define the structure of the session data stored in the database.
+export interface SessionData {
+  session_name: string;
+  fileTree?: FileNode[];
+  // You can add other properties (extractedTexts, summaries, chatHistory, etc.) here
+  [key: string]: unknown;
+}
+
+// Define the session structure returned by your API.
+export interface Session {
+  session_data: SessionData;
+  created_at: string;
+  file_count: number;
+}
+
+// A helper function to recursively extract Excel files from the file tree.
+const getExcelFiles = (nodes: FileNode[]): FileNode[] => {
+  let files: FileNode[] = [];
+  nodes.forEach((node) => {
+    if (node.type === 'file' && /\.(xlsx|xls)$/i.test(node.name)) {
+      files.push(node);
+    }
+    if (node.children && node.children.length > 0) {
+      files = files.concat(getExcelFiles(node.children));
+    }
+  });
+  return files;
+};
+
+// Component to preview an Excel file node.
+const ExcelPreview: React.FC<{ node: FileNode }> = ({ node }) => {
+  const [tableData, setTableData] = useState<string[][]>([]);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    const parseExcel = async () => {
+      if (!node.base64Data) {
+        setError('No data available');
+        return;
+      }
+      try {
+        // Decode the base64 string into a binary string.
+        const binaryStr = atob(node.base64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        // Parse the workbook using XLSX.
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        // Convert the sheet to an array-of-arrays (each row is an array).
+        const data: (string | number | boolean | null)[][] = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, { header: 1 });
+        const stringData: string[][] = data.map(row => row.map(cell => cell !== null ? cell.toString() : ''));
+        setTableData(stringData);
+      } catch {
+        setError('Error parsing Excel file');
+      }
+    };
+
+    parseExcel();
+  }, [node.base64Data]);
+
+  return (
+    <div className="mb-4">
+      <h3 className="font-semibold text-gray-800">{node.name}</h3>
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : tableData.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border border-gray-300">
+            <tbody>
+              {tableData.slice(0, 10).map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-b border-gray-200">
+                  {row.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className="px-2 py-1 border-r border-gray-200 text-gray-800"
+                    >
+                      {cell !== undefined ? cell.toString() : ''}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {tableData.length > 10 && (
+            <p className="text-sm text-gray-600 mt-2">Showing first 10 rows</p>
+          )}
+        </div>
+      ) : (
+        <p className="text-gray-800">No data to preview</p>
+      )}
+    </div>
+  );
+};
+
+const SessionDetail: React.FC = () => {
+  const { sessionId } = useParams();
+  const [session, setSession] = useState<Session | null>(null);
+  const [error, setError] = useState<string>('');
+
+// Add this useEffect to fetch heavy data when the component mounts
+useEffect(() => {
+
+  const userId = localStorage.getItem('userId');
+  if (!userId || !sessionId) return;
+
+  const fetchHeavyData = async () => {
+    try {
+      const res = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      if (!res.ok) throw new Error('Failed to fetch heavy data');
+      const heavyData = await res.json();
+      // Merge heavy data into session data
+      setSession(prev => prev ? {
+        ...prev,
+        session_data: {
+          ...prev.session_data,
+          extractedTexts: heavyData.extractedTexts,
+          summaries: heavyData.summaries
+        }
+      } : null);
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unknown error occurred');
+      }
+    }
+  };
+
+  async function fetchSession() {
+    try {
+      // 1) Minimal session info from the DB
+      const sessRes = await fetch(`/api/sessions/${sessionId}`, {
+        headers: { 'x-user-id': userId || '' },
+      });
+      if (!sessRes.ok) throw new Error('Failed to fetch session');
+      const sessJson = await sessRes.json();
+      // sessJson is { session: { session_id, session_name, created_at, ... } }
+
+      // 2) Heavy data from local file
+      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      // If heavy data doesn’t exist, it might be 404. You can handle that gracefully.
+      if (!heavyRes.ok) {
+        console.warn('No heavy data found (maybe not uploaded yet).');
+      }
+      const heavyJson = heavyRes.ok ? await heavyRes.json() : {};
+
+      // 3) Merge them together
+      // Suppose your DB session JSON doesn't store `session_data` by default.
+      // You can create a structure that includes fileTree, chatHistory, etc.
+      setSession({
+        // For example, you can store them like:
+        session_data: {
+          session_name: sessJson.session.session_name,
+          fileTree: heavyJson.extractedTexts ? [] : [], // or reconstruct if you wish
+          // Or you can do more advanced merges if you have them
+          extractedTexts: heavyJson.extractedTexts || {},
+          summaries: heavyJson.summaries || {},
+        },
+        created_at: sessJson.session.created_at,
+        file_count: sessJson.session.file_count || 0,
+      });
+    } catch (err) {
+      console.error('Error fetching session details:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }
+
+  if (sessionId) {
+    fetchSession();
+    fetchHeavyData();
+  }
+}, [sessionId]);
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <Navbar />
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p className="text-red-600">{error}</p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <Navbar />
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p>Loading session details...</p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Extract Excel files (if any) from the file tree stored in session_data.
+  const excelFiles: FileNode[] = session.session_data.fileTree
+    ? getExcelFiles(session.session_data.fileTree)
+    : [];
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+        <h1 className="text-2xl font-bold mb-6">Session Details</h1>
+        <div className="mb-4">
+          <p>
+            <strong>Name:</strong>{' '}
+            {session.session_data.session_name || 'Untitled Session'}
+          </p>
+          <p>
+            <strong>Created:</strong>{' '}
+            {new Date(session.created_at).toLocaleString()}
+          </p>
+          <p>
+            <strong>Files Count:</strong> {session.file_count}
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-2">Session Data</h2>
+          {/* A scrollable, collapsible JSON viewer */}
+          <div className="max-h-96 overflow-y-auto bg-gray-100 p-4 rounded">
+            <ReactJson
+              src={session.session_data}
+              theme="rjv-default"
+              collapsed={2}
+              displayDataTypes={false}
+              style={{ fontSize: '0.875rem' }}
+            />
+          </div>
+        </div>
+
+        {excelFiles.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-2">Excel Files Preview</h2>
+            {excelFiles.map((file, index) => (
+              <ExcelPreview key={index} node={file} />
+            ))}
+          </div>
+        )}
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+export default SessionDetail;
+
+----------------------------------------
+

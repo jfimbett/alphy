@@ -10,6 +10,7 @@ import { useFileProcessing } from './useFileProcessing';
 import { useChat } from './useChat';
 import { useDropzone } from 'react-dropzone';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { SessionSummary } from '@/app/history/page';
 
 type ExistingUpload = {
   upload_id: number;
@@ -18,6 +19,7 @@ type ExistingUpload = {
 
 export default function Dashboard() {
   const router = useRouter();
+
   const {
     fileTree,
     setFileTree,
@@ -33,8 +35,10 @@ export default function Dashboard() {
     processZip,
     processFolder,
     analyzeFiles,
-    toggleAllFiles
+    toggleAllFiles,
+    saveHeavyData
   } = useFileProcessing();
+
   const {
     contextType,
     setContextType,
@@ -45,13 +49,15 @@ export default function Dashboard() {
     isChatLoading,
     handleChatSubmit
   } = useChat();
+
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [showExtracted, setShowExtracted] = useState(false);
   const [allSelected, setAllSelected] = useState(true);
-  console.log(currentZipName);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
+  const [successMessage, setSuccessMessage] = useState('');
 
   // ---------------------
   // SAVE PROGRESS MODAL
@@ -63,27 +69,91 @@ export default function Dashboard() {
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
 
-  // NEW: For success message
-  const [successMessage, setSuccessMessage] = useState('');
+
+  const [showLoadModal, setShowLoadModal] = useState(false);
+  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
+
+  // New load handler
+  const handleLoadClick = async () => {
+    try {
+      const res = await fetch('/api/sessions', {
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
+      });
+      const data = await res.json();
+      setAvailableSessions(data.sessions);
+      setShowLoadModal(true);
+    } catch {
+      alert('Error loading sessions');
+    }
+  };
+
+  // Updated load confirmation
+  const confirmLoadSession = async (sessionId: string) => {
+    try {
+      const userId = localStorage.getItem('userId');
+      if (!userId) {
+        router.push('/login');
+        return;
+      }
+
+      const response = await fetch('/api/sessions', {
+        headers: { 'x-user-id': userId }
+      });
+      
+      if (!response.ok) throw new Error('Failed to load session');
+      const data = await response.json();
+
+      if (!data.sessions || data.sessions.length === 0) {
+        alert('No session data found.');
+        return;
+      }
+
+      setCurrentSessionId(sessionId);
+
+      // 2) Fetch heavy data
+      const heavyRes = await fetch(
+        `/api/store-heavy-data?sessionId=${sessionId}`
+      );
+      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
+      const heavyData = await heavyRes.json();
+
+      // 3) Rebuild the fileTree from base64
+      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
+      setFileTree(rebuiltTree);
+
+      // 4) Also restore chat history, extracted texts, summaries
+      setChatHistory(heavyData.chatHistory || []);
+      setExtractedTexts(heavyData.extractedTexts || {});
+      setSummaries(heavyData.summaries || {});
+    } catch (error) {
+      console.error('Error loading session:', error);
+      alert('Error loading session: ' + (error as Error).message);
+    }
+  };
+
+  // print to console the variables not used for now
+  console.log(fetchingUploads, existingUploadId, selectedUploadOption, existingUploads, currentSessionId, currentZipName);
 
   // On mount, check if user is logged in
   useEffect(() => {
-    const loggedIn = typeof window !== 'undefined'
-      ? localStorage.getItem('loggedIn')
-      : null;
-    if (!loggedIn) {
-      // If not logged in, redirect
+    const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    if (!userId) {
       router.push('/login');
     }
   }, [router]);
 
+  // --------------------------------
+  // Open/Close "Save Session" Modal
+  // --------------------------------
   const openSaveModal = async () => {
     setNewUploadName('');
     setExistingUploadId(null);
     setSelectedUploadOption('new');
     try {
       setFetchingUploads(true);
-      const res = await fetch('/api/uploads');
+      const res = await fetch('/api/uploads', {
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
+      });
       if (!res.ok) throw new Error('Failed to fetch existing uploads');
       const data = await res.json();
       setExistingUploads(data.uploads || []);
@@ -95,23 +165,16 @@ export default function Dashboard() {
       setShowSaveModal(true);
     }
   };
-
   const closeSaveModal = () => {
     setShowSaveModal(false);
   };
 
+  // --------------------------------
+  // Actually "Save Session"
+  // --------------------------------
   const handleSaveConfirm = async () => {
     try {
-      const fileTreeWithBase64 = addBase64ToTree(fileTree);
-      if (selectedUploadOption === 'existing' && existingUploadId) {
-        await updateExistingUpload(existingUploadId, fileTreeWithBase64);
-      } else {
-        if (!newUploadName.trim()) {
-          alert('Please enter a valid project name.');
-          return;
-        }
-        await createNewUpload(newUploadName.trim(), fileTreeWithBase64);
-      }
+      await saveSession();
       setShowSaveModal(false);
     } catch (error) {
       console.error('Error in handleSaveConfirm:', error);
@@ -119,89 +182,86 @@ export default function Dashboard() {
     }
   };
 
-  async function createNewUpload(uploadName: string, fileTreeWithBase64: FileNode[]) {
-    const response = await fetch('/api/uploads', {
+  async function saveSession(): Promise<string> {
+    // 1) Convert rawData -> base64
+    const fileTreeWithBase64 = addBase64ToTree(fileTree);
+    console.log('fileTreeWithBase64', fileTreeWithBase64);
+    // 2) Create a minimal session row in DB (or skip if you prefer)
+    const res = await fetch('/api/sessions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': localStorage.getItem('userId') || ''
+      },
       body: JSON.stringify({
-        fileTree: fileTreeWithBase64,
-        extractedTexts,
-        summaries,
-        chatHistory,
-        uploadName
+        sessionName: newUploadName.trim()
       })
     });
-    if (!response.ok) throw new Error('Failed to save (createNewUpload)');
-    const data = await response.json();
-    setSuccessMessage(`Upload saved successfully! Upload ID = ${data.upload_id}`);
-    setTimeout(() => setSuccessMessage(''), 3000);
+    if (!res.ok) throw new Error('Failed to save session');
+    const data = await res.json();
+    setCurrentSessionId(data.session_id);
+  
+    // 3) Store heavy data (fileTree, chatHistory, extracted, summaries)
+    await saveHeavyData(data.session_id);
+  
+    setSuccessMessage('Session saved successfully!');
+    setTimeout(() => setSuccessMessage(''), 5000);
+  
+    return data.session_id;
   }
 
-  async function updateExistingUpload(uploadId: number, fileTreeWithBase64: FileNode[]) {
-    const response = await fetch(`/api/uploads/${uploadId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileTree: fileTreeWithBase64,
-        extractedTexts,
-        summaries
-      })
-    });
-    if (!response.ok) throw new Error('Failed to update existing upload');
-    const data = await response.json();
-    setSuccessMessage(`Upload updated successfully with ID = ${data.uploadId}`);
-    setTimeout(() => setSuccessMessage(''), 3000);
-  }
 
-  // --------------------------------
-  // LOAD PROGRESS
-  // --------------------------------
-  const handleLoadProgress = async () => {
-    try {
-      // Get the actual user ID from localStorage
-      const userId = localStorage.getItem('userId') || '';
-      const response = await fetch('/api/sessions', {
-        headers: {
-          'x-user-id': userId
-        }
-      });
-      if (!response.ok) throw new Error('Failed to load session');
-      const data = await response.json();
-      if (!data.session_data || Object.keys(data.session_data).length === 0) {
-        alert('No session data found.');
-        return;
-      }
-      const { fileTree, extractedTexts, summaries, chatHistory } = data.session_data;
-      setFileTree(fileTree || []);
-      setExtractedTexts(extractedTexts || {});
-      setSummaries(summaries || {});
-      setChatHistory(chatHistory || []);
-      alert('Session loaded successfully!');
-    } catch (error) {
-      console.error('Error loading session:', error);
-      alert('Error loading session: ' + (error as Error).message);
-    }
-  };
 
-  // --------------------------------
-  // HELPER: Convert rawData -> base64
-  // --------------------------------
-  function addBase64ToTree(nodes: FileNode[]): FileNode[] {
+  // Helper to convert base64 -> rawData
+  function convertTree(nodes: FileNode[], sessionId: number | string): FileNode[] {
     return nodes.map((node) => {
       if (node.type === 'folder' && node.children) {
-        return { ...node, children: addBase64ToTree(node.children) };
-      } else if (node.type === 'file' && node.rawData) {
-        const uint8Array = new Uint8Array(node.rawData);
-        let binary = '';
-        for (let i = 0; i < uint8Array.length; i++) {
-          binary += String.fromCharCode(uint8Array[i]);
+        return { ...node, children: convertTree(node.children, sessionId) };
+      }
+
+
+      // If it's a file, handle base64 => rawData and also localPath => node.content
+      if (node.type === "file") {
+        // 1) If there's base64Data, convert to rawData
+        if (node.base64Data) {
+          const binaryString = atob(node.base64Data);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          node.rawData = bytes.buffer;
+          node.base64Data = undefined; // free it up
         }
-        const base64Data = btoa(binary);
-        return { ...node, base64Data };
+
+        // 2) If there's a localPath (meaning we wrote this file to disk),
+        // build the route for inline preview
+        if (node.localPath) {
+
+          node.content = `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(node.localPath || '')}`;
+        }
       }
       return node;
-    });
-  }
+      });
+      }
+
+  // The addBase64ToTree function from your code, ensuring each file node has base64Data
+function addBase64ToTree(nodes: FileNode[]): FileNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'folder' && node.children) {
+      return { ...node, children: addBase64ToTree(node.children) };
+    }
+    if (node.type === 'file' && node.rawData) {
+      const uint8 = new Uint8Array(node.rawData);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Data = btoa(binary);
+      return { ...node, base64Data };
+    }
+    return node;
+  });
+}
 
   // --------------------------------
   // FILE SELECTION / HELPERS
@@ -212,7 +272,9 @@ export default function Dashboard() {
   };
   const getAllFiles = (nodes: FileNode[]): FileNode[] => {
     return nodes.flatMap((node) => {
-      if (node.type === 'folder' && node.children) return getAllFiles(node.children);
+      if (node.type === 'folder' && node.children) {
+        return getAllFiles(node.children);
+      }
       return node.type === 'file' ? [node] : [];
     });
   };
@@ -236,12 +298,14 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Success Message */}
         {successMessage && (
           <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
             {successMessage}
           </div>
         )}
 
+        {/* Drag & Drop / Folder Upload */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div
             {...getRootProps()}
@@ -275,18 +339,19 @@ export default function Dashboard() {
                 Upload Folder
               </button>
               <button
-                onClick={handleLoadProgress}
+                onClick={handleLoadClick}
                 className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
               >
                 Load Progress
               </button>
             </div>
             <small className="text-gray-500">
-              Your browser may show a brief warning when uploading a folder. This is normal and ensures you trust the site.
+              Your browser may show a brief warning when uploading a folder. This is normal.
             </small>
           </div>
         </div>
 
+        {/* If we have a file tree, show Analyze + Save Buttons */}
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <div className="mb-4 flex items-center justify-between">
@@ -336,6 +401,8 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+
+            {/* Actual File Tree */}
             <FileTree
               nodes={fileTree}
               onSelect={handleFileSelect}
@@ -357,6 +424,7 @@ export default function Dashboard() {
                   newHighlighted.add(path);
                 }
                 setHighlightedFiles(newHighlighted);
+
                 const updateNodes = (nodes: FileNode[]): FileNode[] =>
                   nodes.map((n) => ({
                     ...n,
@@ -369,6 +437,7 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Selected File Panel */}
         {selectedFile && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h3 className="text-lg font-semibold mb-4">{selectedFile.name}</h3>
@@ -381,11 +450,13 @@ export default function Dashboard() {
                   title="PDF Preview"
                 />
               ) : selectedFile.name.toLowerCase().match(/\.(xlsx|xls)$/) ? (
-                <p>Excel preview not supported directly in the browser, but you can download the file.</p>
+                <p>Excel preview not supported directly in the browser.</p>
               ) : (
                 <p>Preview not available for this file type</p>
               )}
             </div>
+
+            {/* Extracted Text Section */}
             {extractedTexts[selectedFile.fullPath || ''] && (
               <div>
                 <div className="flex items-center justify-between">
@@ -404,6 +475,8 @@ export default function Dashboard() {
                 )}
               </div>
             )}
+
+            {/* Summaries Section */}
             {summaries[selectedFile.fullPath || ''] && (
               <div className="mt-8 border-t pt-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
@@ -424,6 +497,7 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Radio Buttons for Chat Context */}
         <div className="mb-4 flex items-center gap-4">
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
@@ -467,6 +541,7 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Chat Section */}
         <div className="mt-8 border-t pt-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
             <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
@@ -515,97 +590,63 @@ export default function Dashboard() {
             </button>
           </form>
         </div>
-     
-      {/* SAVE PROGRESS MODAL */}
-      {showSaveModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Save Progress</h2>
-            {fetchingUploads ? (
-              <p className="text-gray-600">Loading existing uploads...</p>
-            ) : (
+
+        {/* SAVE PROGRESS MODAL */}
+        {showSaveModal && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
+            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800">Save Session</h2>
               <div className="space-y-4">
-                <div className="flex items-center space-x-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="uploadOption"
-                      value="new"
-                      checked={selectedUploadOption === 'new'}
-                      onChange={() => setSelectedUploadOption('new')}
-                      className="mr-2 text-blue-600"
-                    />
-                    <span className="text-sm text-gray-700">Create New Upload</span>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Session Name:
                   </label>
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="uploadOption"
-                      value="existing"
-                      checked={selectedUploadOption === 'existing'}
-                      onChange={() => setSelectedUploadOption('existing')}
-                      className="mr-2 text-gray-600"
-                    />
-                    <span className="text-sm text-gray-700">Update Existing</span>
-                  </label>
+                  <input
+                    type="text"
+                    className="border border-gray-300 rounded w-full p-2 text-gray-800"
+                    value={newUploadName}
+                    onChange={(e) => setNewUploadName(e.target.value)}
+                    placeholder="Enter a session name..."
+                  />
                 </div>
-                {selectedUploadOption === 'new' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      New Upload Name:
-                    </label>
-                    <input
-                      type="text"
-                      className="border border-gray-300 rounded w-full p-2 text-gray-800"
-                      value={newUploadName}
-                      onChange={(e) => setNewUploadName(e.target.value)}
-                      placeholder="Enter a project name..."
-                    />
-                  </div>
-                )}
-                {selectedUploadOption === 'existing' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Select Existing Upload:
-                    </label>
-                    <select
-                      className="border border-gray-300 rounded w-full p-2"
-                      value={existingUploadId || ''}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        setExistingUploadId(isNaN(val) ? null : val);
-                      }}
-                    >
-                      <option value="">-- Select an Upload --</option>
-                      {existingUploads.map((u) => (
-                        <option key={u.upload_id} value={u.upload_id}>
-                          ID {u.upload_id} - {u.upload_name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
               </div>
-            )}
-            <div className="mt-6 flex justify-end space-x-2">
-              <button
-                onClick={closeSaveModal}
-                className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveConfirm}
-                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-              >
-                Save
-              </button>
+              <div className="mt-6 flex justify-end space-x-2">
+                <button
+                  onClick={closeSaveModal}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveConfirm}
+                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                >
+                  Save Session
+                </button>
+              </div>
             </div>
           </div>
+        )}
+      </main>
+
+      {showLoadModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white p-6 rounded-lg max-w-md w-full">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">Select Session</h3>
+            {availableSessions.map(session => (
+              <div key={session.session_id} 
+                  className="p-3 hover:bg-gray-100 cursor-pointer text-gray-600"
+                  onClick={() => confirmLoadSession(session.session_id.toString())}>
+                <p>{session.session_name}</p>
+                <small>{new Date(session.created_at).toLocaleDateString()}</small>
+              </div>
+            ))}
+            <button onClick={() => setShowLoadModal(false)} className="mt-4 text-gray-800">
+              Go Back
+            </button>
+          </div>
         </div>
-      )}      
-       </main>
-      
+      )}
     </div>
   );
 }

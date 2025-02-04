@@ -1,81 +1,78 @@
+// app/api/sessions/route.tsx
 import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
-
+// app/api/sessions/route.tsx
 export async function GET(request: Request) {
   const client = await pool.connect();
   try {
     const userId = request.headers.get('x-user-id');
-    if (!userId) {
+    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+  
 
-    // Get latest session with files
-    const sessionResult = await client.query(
-      `SELECT s.session_id, s.session_data, 
-              f.file_id, f.file_name, f.file_type
-       FROM sessions s
-       LEFT JOIN files f ON f.session_id = s.session_id
-       WHERE s.user_id = $1
-       ORDER BY s.created_at DESC
-       LIMIT 1`,
-      [userId]
-    );
+    const result = await client.query(`
+      SELECT 
+        s.session_id,
+        s.session_name,
+        s.created_at,
+        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
+      FROM sessions s
+      WHERE s.user_id = $1
+      ORDER BY s.created_at DESC
+    `, [userId]);
 
-    if (sessionResult.rows.length === 0) {
-      return NextResponse.json({ session_data: {} });
-    }
 
-    // Structure response
-    const sessionData = sessionResult.rows[0].session_data;
-    const files = sessionResult.rows
-      .filter(row => row.file_id)
-      .map(row => ({
-        file_id: row.file_id,
-        name: row.file_name,
-        type: row.file_type
-      }));
+    
+    const sessions = result.rows.map((row) => ({
+      session_id: row.session_id,
+      session_name: row.session_name,
+      created_at: row.created_at,
+      file_count: row.file_count
+    }));
 
-    return NextResponse.json({ 
-      session_data: { ...sessionData, files }
-    });
+    return NextResponse.json({ sessions });
   } catch (error) {
     console.error('Session load error:', error);
-    return NextResponse.json({ error: 'Failed to load session' }, { status: 500 });
+    //alert(error);
+    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
   } finally {
     client.release();
   }
 }
 
+
+
 export async function POST(request: Request) {
   const client = await pool.connect();
+  await client.query('BEGIN');
   try {
     const userId = request.headers.get('x-user-id');
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { sessionData, fileIds } = await request.json();
-    
-    // Create new session
-    const sessionResult = await client.query(
-      `INSERT INTO sessions (user_id, session_data)
-       VALUES ($1, $2)
-       RETURNING session_id`,
-      [userId, sessionData]
-    );
-    
-    // Link files to session
-    if (fileIds?.length > 0) {
-      await client.query(
-        `UPDATE files
-         SET session_id = $1
-         WHERE file_id = ANY($2)`,
-        [sessionResult.rows[0].session_id, fileIds]
-      );
-    }
+    const { sessionName } = await request.json();
 
-    return NextResponse.json({ success: true });
+
+    //columns  session_id | user_id | session_name | created_at | expires_at
+    const result = await client.query(`
+      INSERT INTO sessions (user_id, session_name)
+      VALUES ($1, $2)
+      RETURNING session_id, created_at
+    `, [userId, sessionName]);
+
+   
+    const sessionId = result.rows[0].session_id;
+
+    await client.query('COMMIT');
+    return NextResponse.json({
+      success: true,
+      session_id: sessionId,
+      created_at: result.rows[0].created_at
+    });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Session save error:', error);
     return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
   } finally {

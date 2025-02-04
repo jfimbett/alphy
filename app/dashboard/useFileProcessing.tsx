@@ -248,6 +248,9 @@ export function useFileProcessing() {
         setProgress(Math.round((processedCount / total) * 100));
       }
 
+     
+
+
       setExtractedTexts(newExtractedTexts);
 
       // Phase 2: Summarization
@@ -316,6 +319,30 @@ Recall that the text could be written in different languages other than English.
     setFileTree((prev) => updateNodes(prev));
   };
 
+   // Example snippet after analysis completes OR on "Save Session":
+   async function saveHeavyData(sessionId: string) {
+    try {
+      const res = await fetch('/api/store-heavy-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          heavyData: {
+            fileTree,
+            extractedTexts,
+            summaries,
+          },
+        }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to save heavy data');
+      }
+      console.log('Heavy data saved successfully');
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
   return {
     fileTree,
     setFileTree,
@@ -333,5 +360,6 @@ Recall that the text could be written in different languages other than English.
     analyzeFiles,
     toggleAllFiles,
     buildFileTree,
+    saveHeavyData, // <- Add this to your return object
   };
 }

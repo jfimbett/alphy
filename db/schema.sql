@@ -1,6 +1,6 @@
 -- db/schema.sql
 
--- 1) Users table
+-- 1) Users table (unchanged)
 CREATE TABLE IF NOT EXISTS users (
   user_id SERIAL PRIMARY KEY,
   email VARCHAR(255) NOT NULL UNIQUE,
@@ -11,51 +11,42 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-
--- 2) Uploads table
-CREATE TABLE IF NOT EXISTS uploads (
-  upload_id SERIAL PRIMARY KEY,
-  user_id INT NOT NULL,
-  upload_name VARCHAR(255),
-  upload_path TEXT,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(user_id)
-);
-
--- 7) Sessions table
+-- sessions table (lighter)
 CREATE TABLE IF NOT EXISTS sessions (
   session_id SERIAL PRIMARY KEY,
   user_id INT NOT NULL,
-  session_data JSONB,
+  session_name VARCHAR(255),
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days',
   FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
 
-CREATE TABLE files (
+CREATE TABLE IF NOT EXISTS files (
   file_id SERIAL PRIMARY KEY,
-  user_id INT REFERENCES users(user_id),
-  session_id INT REFERENCES sessions(session_id),
+  user_id INT NOT NULL,
+  session_id INT NOT NULL,
   file_name TEXT NOT NULL,
-  file_type TEXT NOT NULL,
-  file_data BYTEA NOT NULL,
-  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  file_path TEXT NOT NULL,
+  file_size BIGINT,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
 
 
--- 5) Extractions table
+-- 4) Extractions table (modified)
 CREATE TABLE IF NOT EXISTS extractions (
   extraction_id SERIAL PRIMARY KEY,
   file_id INT NOT NULL,
-  extracted_text TEXT,
-  summarized_text TEXT,
+  extracted_text TEXT,      -- Store path to text file if large
+  summarized_text TEXT,     -- Store path to summary file if large
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (file_id) REFERENCES files(file_id)
 );
 
--- 6) Named Entities table
+-- 5) Named Entities table (unchanged)
 CREATE TABLE IF NOT EXISTS named_entities (
   entity_id SERIAL PRIMARY KEY,
   file_id INT NOT NULL,
@@ -66,3 +57,12 @@ CREATE TABLE IF NOT EXISTS named_entities (
   FOREIGN KEY (file_id) REFERENCES files(file_id)
 );
 
+-- Example: Create an uploads table
+CREATE TABLE IF NOT EXISTS uploads (
+  upload_id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL,                -- references 'users' table
+  upload_name VARCHAR(255) NOT NULL,   -- name of the upload (e.g. "Financial Docs")
+  upload_path TEXT,                    -- optional path or label, if needed
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
