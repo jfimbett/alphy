@@ -49,8 +49,11 @@ export default function HistoryPage() {
   // Delete a session
   async function handleDeleteSession(sessionId: number) {
     const userId = localStorage.getItem('userId') || '';
-    const confirmDelete = confirm('Are you sure you want to delete this session?');
-    if (!confirmDelete) return;
+     // First confirmation:
+    if (!confirm('Are you sure you want to delete this session?')) return;
+    // Second confirmation:
+    if (!confirm('This action is permanent and cannot be undone. Continue?')) return;
+
 
     try {
       const res = await fetch(`/api/sessions/${sessionId}`, {
@@ -64,7 +67,6 @@ export default function HistoryPage() {
 
       // Remove it from local state
       setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-      alert('Session deleted successfully.');
     } catch (err: unknown) {
       if (err instanceof Error) {
         alert('Error deleting session: ' + err.message);

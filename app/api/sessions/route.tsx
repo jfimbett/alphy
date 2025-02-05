@@ -1,6 +1,6 @@
 // app/api/sessions/route.tsx
 import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
+import pool from '../../../utils/db';
 // app/api/sessions/route.tsx
 export async function GET(request: Request) {
   const client = await pool.connect();

@@ -1,0 +1,7 @@
+// {// convert to tsconfig.json if we need to run
+//   "extends": "../tsconfig.json",
+//   "compilerOptions": {
+//     "outDir": "../dist/scripts",
+//     "rootDir": "."
+//   }
+// }

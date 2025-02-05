@@ -1,6 +1,8 @@
 // app/api/sessions/[sessionId]/route.tsx
 import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
+import fs from 'fs';
+import path from 'path';
 
 export async function GET(
   request: Request,
@@ -60,13 +62,29 @@ export async function DELETE(
       `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
       [sId, userId]
     );
-    await client.query('COMMIT');
     if (deleteResult.rowCount === 0) {
+      // Nothing to delete or unauthorized
+      await client.query('ROLLBACK');
       return NextResponse.json(
         { error: 'Session not found or not authorized' },
         { status: 404 }
       );
     }
+
+    await client.query('COMMIT');
+
+     // 3) Remove the session folder from disk (best-effort)
+    // data/<sessionId> is the folder holding heavyData.json + /files
+    const sessionPath = path.join(process.cwd(), 'data', String(sId));
+    try {
+      // Node 14 and below do not support fs.rmSync, so if you need older Node, use rmdirSync.
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`Deleted directory: ${sessionPath}`);
+    } catch (err) {
+      // Not critical if folder removal fails – but we log it.
+      console.error(`Failed to remove folder ${sessionPath}:`, err);
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     await client.query('ROLLBACK');
