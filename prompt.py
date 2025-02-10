@@ -7,7 +7,8 @@ def main():
                'app/dashboard',
                'app/api',
                'app/components',
-               'app/history'
+               'app/history',
+               'app/db'
                ]  
 
     # Output file where all file info will be saved
