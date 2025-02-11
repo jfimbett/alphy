@@ -1,7 +1,7 @@
 // app/data/[cik]/page.tsx
 export const dynamic = "force-dynamic";
 import { CompanyFactsPage } from "@/components/ui/company-facts-page";
-
+import Navbar from "@/components/Navbar";
 interface CompanyDataPageProps {
   params: {
     cik: string;
@@ -15,6 +15,7 @@ export default async function CompanyDataPage({ params }: CompanyDataPageProps) 
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Navbar />
       <main className="max-w-4xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
           Company Financial Facts & Info
