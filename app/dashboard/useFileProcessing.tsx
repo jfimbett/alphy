@@ -172,7 +172,7 @@ export function useFileProcessing() {
   // ======================
   // ANALYZE FILES
   // ======================
-  const analyzeFiles = async () => {
+  const analyzeFiles = async (model: string) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
 
@@ -278,6 +278,7 @@ Recall that the text could be written in different languages other than English.
                 prompt,
                 context: text.substring(0, 2000) || '',
                 history: [],
+                model: model,
               }),
             });
 

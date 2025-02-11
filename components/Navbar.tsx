@@ -49,6 +49,9 @@ export default function Navbar() {
               <Link href="/history">
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
               </Link>
+              <Link href="/data">
+                <span className="text-gray-700 hover:text-blue-600 transition-colors">Financial Data</span>
+              </Link>
               {/* Settings icon */}
               <Link href="/settings" title="Settings">
                 <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />

@@ -41,16 +41,17 @@ export function useChat() {
         context = globalContext.slice(0, 5000);
       }
 
-      const promptWithContext = context
-      ? `${chatMessage}\n\nContext:\n\n${context}`
-      : chatMessage;
+
 
       const res = await fetch('/api/llm', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptWithContext,
-          model,
-          history: newHistory
+        headers: { 'Content-Type': 'application/json' ,
+          'x-user-id': localStorage.getItem('userId') || ''
+        },
+        body: JSON.stringify({ prompt: chatMessage,
+          context: context,
+          history: newHistory,
+          model: model,
          }),
       });
 

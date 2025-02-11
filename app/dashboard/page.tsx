@@ -388,7 +388,7 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <button
-                  onClick={analyzeFiles}
+                  onClick={() => analyzeFiles(selectedModel)}
                   className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
                   disabled={isAnalyzing}
                 >

@@ -390,7 +390,7 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <button
-                  onClick={analyzeFiles}
+                  onClick={() => analyzeFiles(selectedModel)}
                   className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
                   disabled={isAnalyzing}
                 >
@@ -709,11 +709,13 @@ export function useChat() {
   const handleChatSubmit = async ({
     e,
     selectedFileText,
-    globalContext
+    globalContext,
+    model
   }: {
     e: React.FormEvent;
     selectedFileText: string | undefined;
     globalContext: string | undefined;
+    model?: string;
   }) => {
     e.preventDefault();
     if (!chatMessage.trim()) return;
@@ -731,13 +733,16 @@ export function useChat() {
       }
 
       const promptWithContext = context
-        ? chatMessage + '\n\nContext:\n\n' + context
-        : chatMessage;
+      ? `${chatMessage}\n\nContext:\n\n${context}`
+      : chatMessage;
 
       const res = await fetch('/api/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptWithContext }),
+        body: JSON.stringify({ prompt: promptWithContext,
+          model,
+          history: newHistory
+         }),
       });
 
       if (!res.ok) throw new Error('Chat failed');
@@ -945,7 +950,7 @@ export function useFileProcessing() {
   // ======================
   // ANALYZE FILES
   // ======================
-  const analyzeFiles = async () => {
+  const analyzeFiles = async (model: string) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
 
@@ -1051,6 +1056,7 @@ Recall that the text could be written in different languages other than English.
                 prompt,
                 context: text.substring(0, 2000) || '',
                 history: [],
+                model: model,
               }),
             });
 
@@ -1139,1681 +1145,132 @@ Recall that the text could be written in different languages other than English.
 
 ----------------------------------------
 
-File: app/api\account-data\route.tsx
-----------------------------------------
-// app/api/account-data/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    // e.g. "AccountsPayableCurrent"
-    const accountParam = searchParams.get("account") ?? ""
-    // e.g. "2022" or "2023"
-    const yearParam = searchParams.get("year") ?? ""
-
-    if (!accountParam) {
-      return NextResponse.json({ error: "Missing 'account' query param" }, { status: 400 })
-    }
-
-    // Remote endpoint might be something like:
-    //    /all_data_for_account?account=AccountsPayableCurrent&year=2022&api_token=...
-    const remoteUrl = `${BASE_URL}/all_data_for_account?account=${accountParam}&year=${yearParam}&api_token=${API_TOKEN}`
-
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/account-data route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\all-accounts\route.tsx
-----------------------------------------
-// app/api/all-accounts/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.EXTERNAL_API_BASE_URL // e.g. "https://df1c-194-214-160-21.ngrok-free.app"
-const API_TOKEN = process.env.EXTERNAL_API_TOKEN   // e.g. "t3stt%40ken"
-
-export async function GET() {
-  try {
-    // Build remote URL
-    const remoteUrl = `${BASE_URL}/all_accounts?api_token=${API_TOKEN}`
-
-    // Server-to-server fetch => no CORS issue
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/all-accounts route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\auth\login\route.tsx
-----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    const userRes = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    client.release();
-    if (userRes.rowCount === 0) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    const user = userRes.rows[0];
-    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!passwordMatch) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    // Return user data (do not include the password hash)
-    const userData = { user_id: user.user_id, email: user.email };
-    return NextResponse.json({ success: true, user: userData }, { status: 200 });
-  } catch (error) {
-    console.error('Error in login:', error);
-    return NextResponse.json({ error: 'Error logging in' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\auth\signup\route.tsx
-----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password, company, reason } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    // Check if the user already exists
-    const userCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userCheck && userCheck.rowCount !== null && userCheck.rowCount > 0) {
-      client.release();
-      return NextResponse.json({ error: 'User already exists' }, { status: 400 });
-    }
-    // Hash the password
-    const salt = bcrypt.genSaltSync(10);
-    const password_hash = bcrypt.hashSync(password, salt);
-    // Insert new user
-    const result = await client.query(
-      `INSERT INTO users (email, password_hash, company, reason) 
-       VALUES ($1, $2, $3, $4) RETURNING user_id, email`,
-      [email, password_hash, company, reason]
-    );
-    client.release();
-    return NextResponse.json({ success: true, user: result.rows[0] }, { status: 200 });
-  } catch (error) {
-    console.error('Error in signup:', error);
-    return NextResponse.json({ error: 'Error signing up' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\company-facts\route.tsx
-----------------------------------------
-// app/api/company-facts/route.ts
-
-import { NextResponse } from "next/server"
-
-// We'll assume you're using .env for the base URL and token.
-// If not, you can hardcode them here.
-const BASE_URL = process.env.EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    // 1) Extract query params from the incoming request
-    const { searchParams } = new URL(request.url)
-    // e.g. "320193"
-    const cik = searchParams.get("cik") ?? ""
-
-    // 2) Build the remote URL
-    // => e.g. "https://df1c-xxx.ngrok-free.app/company_facts?cik=320193&api_token=t3stt%40ken"
-    const remoteUrl = `${BASE_URL}/company_facts?cik=${cik}&api_token=${API_TOKEN}`
-
-    // 3) Fetch from the external API (server-to-server, no CORS issues here)
-    const response = await fetch(remoteUrl, {
-      method: "GET",
-    })
-
-    if (!response.ok) {
-      // e.g. 404, 500, ...
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    // 4) Return the JSON response to the client
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/company-facts route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\files\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const formData = await request.formData();
-    const files = formData.getAll('files') as File[];
-    
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
-    }
-
-    const insertedFiles = [];
-    
-    for (const file of files) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const result = await client.query(
-        `INSERT INTO files 
-         (user_id, file_name, file_type, file_data, session_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING file_id`,
-         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
-      );
-      insertedFiles.push(result.rows[0].file_id);
-    }
-
-    return NextResponse.json({ success: true, fileIds: insertedFiles });
-  } catch (error) {
-    console.error('File upload error:', error);
-    return NextResponse.json({ error: 'File upload failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query(`SELECT * FROM files;`);
-    client.release();
-
-    return NextResponse.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error fetching files' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\files\[fileId]\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-
-export async function GET(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const fileId = parseInt(params.fileId);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    const result = await client.query(
-      `SELECT file_name, file_type, file_data 
-       FROM files 
-       WHERE file_id = $1`,
-      [fileId]
-    );
-
-    if (result.rowCount === 0) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    const file = result.rows[0];
-    return new NextResponse(file.file_data, {
-      headers: {
-        'Content-Type': file.file_type,
-        'Content-Disposition': `attachment; filename="${file.file_name}"`
-      }
-    });
-  } catch (error) {
-    console.error('File download error:', error);
-    return NextResponse.json({ error: 'File download failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  let client;
-  try {
-    client = await pool.connect();
-    const fileId = parseInt(params.fileId, 10);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    // Remove any extractions for this file, then remove the file itself
-    await client.query('DELETE FROM extractions WHERE file_id = $1', [fileId]);
-    await client.query('DELETE FROM files WHERE file_id = $1', [fileId]);
-
-    client.release();
-    return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error('Error deleting file:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error deleting file' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\financial-data\route.tsx
-----------------------------------------
-// app/api/financial-data/route.ts
-import { NextResponse } from "next/server"
-import { Pool } from 'pg';
-
-const pool = new Pool({
-    port: 5432,
-    host: 'localhost',
-    user: 'postgres',
-    password: '1234',
-    database: 'sec_financial_data',
-});
-
-export async function GET(request: Request) {
-  try {
-    // 1) Parse query params from the URL
-    const { searchParams } = new URL(request.url)
-    const nameParam = (searchParams.get("name") ?? "").trim().toLowerCase()
-    const tickerParam = (searchParams.get("ticker") ?? "").trim().toLowerCase()
-    const cikParam = (searchParams.get("cik") ?? "").trim()
-
-    // 2) Prepare placeholders.
-    //    For name, we use a LIKE pattern if it's not empty: '%<name>%'
-    //    For ticker, we do an exact match but case-insensitive, so we store it in lowercase and compare with LOWER(t.ticker).
-    //    For cik, we do an exact match.
-    const nameFilter = nameParam ? `%${nameParam}%` : ""
-    const tickerFilter = tickerParam // empty if none provided
-    const cikFilter = cikParam // empty if none provided
-
-    // 3) Connect to the database
-    const client = await pool.connect()
-
-    // 4) Build and run the query
-    //    Explanation:
-    //    - LEFT JOIN `tickers` so we can gather possible tickers per `companies` row
-    //    - Filter with a combination of name, ticker, and/or cik
-    //    - If the corresponding parameter is empty, we skip that filter
-    //    - Group by c.cik, c.name so we can do array_agg on the tickers
-    const sql = `
-      SELECT
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) AS tickers
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE
-        ($1 = '' OR LOWER(c.name) LIKE $1)
-        AND ($2 = '' OR LOWER(t.ticker) = $2)
-        AND ($3 = '' OR c.cik = $3)
-      GROUP BY c.cik, c.name
-      ORDER BY c.name ASC
-      LIMIT 50;
-    `
-
-    const result = await client.query(sql, [
-      nameFilter,
-      tickerFilter,
-      cikFilter,
-    ])
-
-    client.release()
-
-    // 5) Return JSON response
-    return NextResponse.json(result.rows)
-  } catch (error) {
-    console.error("Error in /api/financial-data:", error)
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    )
-  }
-}
-
-----------------------------------------
-
-File: app/api\llm\route.tsx
+File: app/api/llm\route.tsx
 ----------------------------------------
 // app/api/llm/route.ts
-import { createClient } from '@supabase/supabase-js';
+import { NextResponse } from 'next/server'
+import pool from '@/utils/db';
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 export const dynamic = 'force-dynamic'; // Required for streaming/async operations
 
-export async function POST(req: Request) {
-  const { prompt, context, history, model } = await req.json();
 
-  // Validate parameters
+
+export async function POST(req: Request) {
+  const body = await req.json();
+  const { prompt, context, history, model } = body || {};
+
   if (!prompt || typeof prompt !== 'string') {
-      return Response.json({ error: "Invalid prompt" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid prompt" }, { status: 400 });
   }
 
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
   const userId = req.headers.get('x-user-id');
 
+  // === If in dev mode, return a mock response immediately
   if (DEVELOPMENT) {
     console.log('Using mock LLM responses');
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return Response.json({ 
-      content: `[MOCK RESPONSE] ${model} response...`,
+    await new Promise(res => setTimeout(res, 500));
+    return NextResponse.json({
+      content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
       tokensUsed: 42
     });
   }
 
-  
-
-  // Ensure history is an array and limit to last 2 messages
-  const limitedHistory = Array.isArray(history) 
-  ? history.slice(-2)
-  : [];
-
-  // Real implementation
   try {
-    // const res = await fetch('http://localhost:11434/api/chat', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     model: "deepseek-r1:70b",
-    //     stream: false,
-    //     temperature: 0.0,
-    //     messages: [
-    //       { role: "system", content: context || "" }, // Handle undefined context
-    //       ...limitedHistory,
-    //       { role: "user", content: prompt }
-    //     ]
-    //   }),
-    // });
+    let response: Response | null = null;
 
-    const { data: apiKeys } = await supabase
-    .from('api_keys')
-    .select('provider, decrypted_key')
-    .eq('user_id', userId);
+    // --------------------------------------------------------------------
+    // 1) LOCAL MODEL (no API key needed)
+    // --------------------------------------------------------------------
+    if (model?.startsWith('local:')) {
+      response = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model.replace('local:', ''),
+          stream: false,
+          messages: [
+            { role: 'system', content: context || '' },
+            ...(Array.isArray(history) ? history : []),
+            { role: 'user', content: prompt },
+          ],
+        }),
+      });
+    }
 
-  const keyMap = Object.fromEntries(
-    apiKeys?.map((k: { provider: string; decrypted_key: string }) => [k.provider, k.decrypted_key]) || []
-  );
+    // --------------------------------------------------------------------
+    // 2) OPENAI MODEL (must fetch user’s openai key from DB)
+    // --------------------------------------------------------------------
+    else if (model?.startsWith('openai:')) {
+      // Query the DB for the user’s key
+      const apiKeyRes = await pool.query(
+        `SELECT provider, decrypted_key 
+         FROM api_keys 
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const keyMap = Object.fromEntries(
+        apiKeyRes.rows.map((row: { provider: string; decrypted_key: string }) => [
+          row.provider,
+          row.decrypted_key
+        ])
+      );
 
-  let response;
-  if (model.startsWith('local:')) {
-    // Local model via Ollama
-    response = await fetch('http://localhost:11434/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model.replace('local:', ''),
-        stream: false,
-        messages: [
-          { role: "system", content: context || "" },
-          ...history,
-          { role: "user", content: prompt }
-        ]
-      }),
-    });
-  } else if (model.startsWith('openai:')) {
-    // OpenAI API
-    response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${keyMap.openai}`
-      },
-      body: JSON.stringify({
-        model: model.replace('openai:', ''),
-        messages: [
-          { role: "system", content: context || "" },
-          ...history,
-          { role: "user", content: prompt }
-        ]
-      })
-    });
-  }
+      // If no openai key found for this user, handle that gracefully
+      const openaiKey = keyMap.openai;
+      if (!openaiKey) {
+        return NextResponse.json(
+          { error: 'No OpenAI API key found for this user' },
+          { status: 400 }
+        );
+      }
 
-    if (!response || !response.ok) throw new Error(`LLM API Error: ${response?.statusText || 'No response'}`);
-    
-    const data = await response.json();
-    return Response.json({
-      content: data.choices?.[0]?.message?.content || data.message?.content || "",
-      tokensUsed: data.usage?.total_tokens || 0
-    });
-  } catch (error) {
-    console.error('LLM Processing Error:', error);
-    return Response.json(
-      { error: "LLM processing failed" },
-      { status: 500 }
-    );
-  }
-}
-----------------------------------------
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`
+        },
+        body: JSON.stringify({
+          model: model.replace('openai:', ''),
+          messages: [
+            { role: 'system', content: context || '' },
+            ...(Array.isArray(history) ? history : []),
+            { role: 'user', content: prompt }
+          ]
+        })
+      });
+    }
 
-File: app/api\search\route.tsx
-----------------------------------------
-// app/api/search/route.ts
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('query') || '';
-
-  try {
-    const client = await pool.connect();
-    const searchQuery = `
-      SELECT 
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) as tickers,
-        ts_rank(to_tsvector('english', c.name), plainto_tsquery('english', $1)) as rank
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE 
-        to_tsvector('english', c.name) @@ plainto_tsquery('english', $1) OR
-        t.ticker = $1 OR
-        c.cik = $1
-      GROUP BY c.cik, c.name
-      ORDER BY rank DESC
-      LIMIT 10;
-    `;
-
-    const result = await client.query(searchQuery, [query]);
-    client.release();
-
-    return NextResponse.json(result.rows.map(row => ({
-      ...row,
-      searchTerm: row.tickers.includes(query.toUpperCase()) ? query.toUpperCase() : row.cik === query ? query : row.name
-    })));
-  } catch  {
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-----------------------------------------
-
-File: app/api\session-file\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import mime from 'mime'; // install via `npm install mime` if you want to do more robust MIME detection
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get('sessionId');
-    const filePath = searchParams.get('filePath');
-
-    if (!sessionId || !filePath) {
+    // --------------------------------------------------------------------
+    // 3) If model is neither local nor openai, handle as error or fallback
+    // --------------------------------------------------------------------
+    else {
       return NextResponse.json(
-        { error: 'Missing sessionId or filePath' },
+        { error: `Unknown model type: ${model}` },
         { status: 400 }
       );
     }
 
-    // Construct the absolute path on disk
-    const absolutePath = path.join(
-      process.cwd(),
-      'data',
-      sessionId,
-      decodeURIComponent(filePath) // Add URI decoding
-    );
-
-    console.log('Serving file:', absolutePath);
-
-    if (!fs.existsSync(absolutePath)) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    // If no response from above calls, error
+    if (!response) {
+      throw new Error('No response from LLM fetch');
     }
-
-    // Read file from disk
-    const fileBuffer = fs.readFileSync(absolutePath);
-
-    // Infer MIME type from the filename extension, or fall back to octet-stream
-    const mimeType = mime.getType(absolutePath) || 'application/octet-stream';
-
-    const headers = {
-      'Content-Type': mimeType,
-      'Content-Disposition': `inline; filename="${path.basename(absolutePath)}"`,
-    };
-    // Add proper PDF content disposition
-    if (mimeType === 'application/pdf') {
-      headers['Content-Disposition'] = `inline; filename="${path.basename(absolutePath)}"`;
-    } else {
-      headers['Content-Disposition'] = `attachment; filename="${path.basename(absolutePath)}"`;
-    }
-
-    // Return the file bytes in the response
-    return new NextResponse(fileBuffer, {
-      headers: headers,
-    });
-  } catch (error) {
-    console.error('Error serving file:', error);
-    return NextResponse.json({ error: 'File serving error' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\sessions\route.tsx
-----------------------------------------
-// app/api/sessions/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-// app/api/sessions/route.tsx
-export async function GET(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  
-
-    const result = await client.query(`
-      SELECT 
-        s.session_id,
-        s.session_name,
-        s.created_at,
-        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
-      FROM sessions s
-      WHERE s.user_id = $1
-      ORDER BY s.created_at DESC
-    `, [userId]);
-
-
-    
-    const sessions = result.rows.map((row) => ({
-      session_id: row.session_id,
-      session_name: row.session_name,
-      created_at: row.created_at,
-      file_count: row.file_count
-    }));
-
-    return NextResponse.json({ sessions });
-  } catch (error) {
-    console.error('Session load error:', error);
-    //alert(error);
-    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { sessionName } = await request.json();
-
-
-    //columns  session_id | user_id | session_name | created_at | expires_at
-    const result = await client.query(`
-      INSERT INTO sessions (user_id, session_name)
-      VALUES ($1, $2)
-      RETURNING session_id, created_at
-    `, [userId, sessionName]);
-
-   
-    const sessionId = result.rows[0].session_id;
-
-    await client.query('COMMIT');
-    return NextResponse.json({
-      success: true,
-      session_id: sessionId,
-      created_at: result.rows[0].created_at
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Session save error:', error);
-    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-----------------------------------------
-
-File: app/api\sessions\[sessionId]\route.tsx
-----------------------------------------
-// app/api/sessions/[sessionId]/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import fs from 'fs';
-import path from 'path';
-
-export async function GET(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-
-    const res = await client.query(
-      `SELECT session_id, session_name, created_at
-         FROM sessions
-        WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (res.rowCount === 0) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    const session = res.rows[0];
-    return NextResponse.json({ session });
-  } catch (error) {
-    console.error('Error fetching session:', error);
-    return NextResponse.json({ error: 'Error fetching session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-    // Optionally, remove the session reference from files (set session_id to NULL)
-    await client.query(
-      `UPDATE files SET session_id = NULL WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    const deleteResult = await client.query(
-      `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (deleteResult.rowCount === 0) {
-      // Nothing to delete or unauthorized
-      await client.query('ROLLBACK');
-      return NextResponse.json(
-        { error: 'Session not found or not authorized' },
-        { status: 404 }
-      );
-    }
-
-    await client.query('COMMIT');
-
-     // 3) Remove the session folder from disk (best-effort)
-    // data/<sessionId> is the folder holding heavyData.json + /files
-    const sessionPath = path.join(process.cwd(), 'data', String(sId));
-    try {
-      // Node 14 and below do not support fs.rmSync, so if you need older Node, use rmdirSync.
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      console.log(`Deleted directory: ${sessionPath}`);
-    } catch (err) {
-      // Not critical if folder removal fails – but we log it.
-      console.error(`Failed to remove folder ${sessionPath}:`, err);
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error deleting session:', error);
-    return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-----------------------------------------
-
-File: app/api\store-heavy-data\route.tsx
-----------------------------------------
-// app/api/store-heavy-data/route.ts
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { FileNode } from '@/components/FileTree';
-
-export async function POST(request: Request) {
-  try {
-    const { sessionId, heavyData } = await request.json();
-    if (!sessionId) {
-      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-    }
-
-    // 1) Create the directory structure: data/sessionId/files
-    const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
-    const filesDir = path.join(dataDir, 'files');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    if (!fs.existsSync(filesDir)) {
-      fs.mkdirSync(filesDir);
-    }
-
-    // 2) For each file node in fileTree, decode base64 -> raw file
-    function storeFilesRecursively(nodes: FileNode[]): FileNode[] {
-      return nodes.map((node, idx) => {
-        if (node.type === 'folder' && node.children) {
-          return { ...node, children: storeFilesRecursively(node.children) };
-        }
-        if (node.type === 'file' && node.base64Data) {
-          // decode base64
-          const buffer = Buffer.from(node.base64Data, 'base64');
-          // create a unique filename. You can also keep the original name if you prefer
-          // but we add idx or a timestamp to avoid collisions:
-          const safeName = node.name.replace(/[^\w\d.]+/g, '_');
-          const fileName = `file_${Date.now()}_${idx}_${safeName}`;
-          const filePath = path.join(filesDir, fileName);
-
-          // 3) Write the file to data/sessionId/files/
-          fs.writeFileSync(filePath, buffer);
-
-          // 4) Remove base64Data from the node, and add localPath
-          return {
-            ...node,
-            base64Data: undefined,
-            rawData: undefined,
-            localPath: `files/${fileName}`
-          };
-        }
-        return node;
-      });
-    }
-
-    // If there's a fileTree, store each file on disk
-    let updatedFileTree: FileNode[] = [];
-    if (heavyData.fileTree) {
-      updatedFileTree = storeFilesRecursively(heavyData.fileTree);
-    }
-
-    // 5) Overwrite heavyData.fileTree with the updated one
-    const finalHeavyData = {
-      ...heavyData,
-      fileTree: updatedFileTree
-    };
-
-    // 6) Write everything to heavyData.json
-    const filePath = path.join(dataDir, 'heavyData.json');
-    fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
-
-    return NextResponse.json({ success: true, filePath });
-  } catch (error) {
-
-    return NextResponse.json(
-      { error: 'Failed to save heavy data' + error },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const sessionId = searchParams.get('sessionId');
-
-  if (!sessionId) {
-    return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-  }
-
-  try {
-    const dataDir = path.join(process.cwd(), 'data', sessionId);
-    const filePath = path.join(dataDir, 'heavyData.json');
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ error: 'No heavyData found' }, { status: 404 });
-    }
-
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
-  } catch (error) {
-    console.error('Error reading heavy data:', error);
-    return NextResponse.json({ error: 'Heavy data not found' }, { status: 404 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\submission-history\route.tsx
-----------------------------------------
-// app/api/submission-history/route.ts
-
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const cik = searchParams.get("cik") ?? ""
-
-    const remoteUrl = `${BASE_URL}/submission_history?cik=${cik}&api_token=${API_TOKEN}`
-    const response = await fetch(remoteUrl, { method: "GET" })
     if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
+      throw new Error(`LLM API Error: ${response.statusText || 'No response'}`);
     }
 
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/submission-history route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
+    // Parse JSON from the LLM response
+    const data = await response.json();
+    return NextResponse.json({
+      content: data.choices?.[0]?.message?.content || data.message?.content || "",
+      tokensUsed: data.usage?.total_tokens || 0
+    });
 
-----------------------------------------
-
-File: app/api\test\route.tsx
-----------------------------------------
-// app/api/test/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT * FROM files ORDER BY file_id;');
-    client.release();
-
-    return NextResponse.json(result.rows);
   } catch (error) {
-    console.error('Error fetching data', error);
-    return NextResponse.json({ error: 'Error fetching data' }, { status: 500 });
+    console.error('LLM Processing Error:', error);
+    return NextResponse.json({ error: "LLM processing failed" }, { status: 500 });
   }
 }
-
-----------------------------------------
-
-File: app/api\uploads\route.tsx
-----------------------------------------
-// app/api/uploads/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-export async function GET(request: Request) {
-  const userId = request.headers.get('x-user-id');
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  try {
-    const client = await pool.connect();
-    // 1) Fetch all uploads for this user:
-    const uploadsResult = await client.query(`
-      SELECT upload_id, upload_name, created_at
-      FROM uploads
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-    `, [userId]);
-
-    const uploads = uploadsResult.rows;
-    client.release();
-    return NextResponse.json({ uploads });
-  } catch (error) {
-    console.error('Error fetching uploads:', error);
-    return NextResponse.json({ error: 'Error fetching uploads' }, { status: 500 });
-  }
-}
-
-export async function POST(request: Request) {
-  let client;
-  try {
-    client = await pool.connect();
-    const body = await request.json();
-    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
-
-    // 1) Validate user ID from headers
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // 2) Validate required fields
-    if (!uploadName) {
-      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
-    }
-
-    // 3) Create a new "upload" row
-    const insertUploadRes = await client.query(
-      `INSERT INTO uploads (user_id, upload_name)
-       VALUES ($1, $2)
-       RETURNING upload_id`,
-      [userId, uploadName]
-    );
-    const newUploadId = insertUploadRes.rows[0].upload_id;
-
-    // 4) Gather all files from the fileTree
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // base64 string from the frontend
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) {
-          traverseTree(node.children);
-        }
-      }
-    }
-    traverseTree(fileTree || []);
-
-    // 5) Insert each file row + extraction if applicable
-    for (const file of filesToInsert) {
-      const fileDataBuffer = file.fileDataBase64
-        ? Buffer.from(file.fileDataBase64, 'base64')
-        : null;
-
-      // Insert a row in "files"
-      const insertFileRes = await client.query(
-        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING file_id`,
-        [
-          newUploadId,
-          file.fileName,
-          file.fullPath,
-          file.mimeType,
-          fileDataBuffer,
-          false
-        ]
-      );
-
-      const fileId = insertFileRes.rows[0].file_id;
-
-      // If there's text or summary, insert into "extractions"
-      const extractedText = extractedTexts?.[file.fullPath];
-      const summary = summaries?.[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(
-          `UPDATE files SET is_extracted = TRUE WHERE file_id = $1`,
-          [fileId]
-        );
-
-        // Insert into "extractions"
-        await client.query(
-          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-           VALUES ($1, $2, $3)`,
-          [fileId, extractedText || null, summary || null]
-        );
-      }
-    }
-
-    client.release();
-
-    // Return the upload_id and chatHistory (if any)
-    return NextResponse.json(
-      { upload_id: newUploadId, chatHistory },
-      { status: 200 }
-    );
-  } catch (error) {
-    console.error('Error creating new upload:', error);
-    if (client) client.release();
-    return NextResponse.json(
-      { error: 'Error creating new upload' },
-      { status: 500 }
-    );
-  }
-}
-
-----------------------------------------
-
-File: app/api\uploads\[uploadId]\route.tsx
-----------------------------------------
-
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-
-export async function DELETE(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId,10);
-    if(isNaN(uploadId)) {
-      return NextResponse.json({ error:'Invalid upload ID'},{ status:400 });
-    }
-    //1) Find all files for this upload
-    const fileRes = await client.query(
-      'SELECT file_id FROM files WHERE upload_id=$1',[uploadId]
-    );
-    const fileIds = fileRes.rows.map(r=>r.file_id);
-    //2) Delete extractions for these files
-    if(fileIds.length>0) {
-      await client.query(
-        'DELETE FROM extractions WHERE file_id=ANY($1)',
-        [fileIds]
-      );
-    }
-    //3) Delete files themselves
-    await client.query('DELETE FROM files WHERE upload_id=$1',[uploadId]);
-    //4) Finally delete the upload
-    await client.query('DELETE FROM uploads WHERE upload_id=$1',[uploadId]);
-    client.release();
-    return NextResponse.json({ success:true },{ status:200 });
-  } catch(error) {
-    console.error('Error deleting entire upload:',error);
-    if(client) client.release();
-    return NextResponse.json({ error:'Error deleting upload'},{ status:500 });
-  }
-}
-
-
-export async function PATCH(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId, 10);
-    if (isNaN(uploadId)) {
-      return NextResponse.json({ error: 'Invalid upload ID' }, { status: 400 });
-    }
-
-    const body = await request.json();
-    const { fileTree, extractedTexts, summaries } = body;
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // from front end
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) traverseTree(node.children);
-      }
-    }
-    traverseTree(fileTree);
-
-    // For each file, either insert or update
-    for (const file of filesToInsert) {
-      const existingFileRes = await client.query(
-        `SELECT file_id FROM files WHERE upload_id = $1 AND file_path = $2`,
-        [uploadId, file.fullPath]
-      );
-      let fileId: number;
-      if (existingFileRes.rowCount && existingFileRes.rowCount > 0) {
-        fileId = existingFileRes.rows[0].file_id;
-        // Potentially update file_data if new base64 data is provided
-        if (file.fileDataBase64) {
-          const fileDataBuffer = Buffer.from(file.fileDataBase64, 'base64');
-          await client.query(
-            `UPDATE files
-                SET file_data = $2, mime_type=$3
-              WHERE file_id = $1`,
-            [fileId, fileDataBuffer, file.mimeType]
-          );
-        }
-      } else {
-        // Insert new file row
-        const fileDataBuffer = file.fileDataBase64
-          ? Buffer.from(file.fileDataBase64, 'base64')
-          : null;
-        const insertRes = await client.query(
-          `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING file_id`,
-          [
-            uploadId,
-            file.fileName,
-            file.fullPath,
-            file.mimeType,
-            fileDataBuffer,
-            false
-          ]
-        );
-        fileId = insertRes.rows[0].file_id;
-      }
-
-      // Check if we have extraction for that path
-      const extractedText = extractedTexts[file.fullPath];
-      const summary = summaries[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id = $1`, [fileId]);
-        // Upsert extraction
-        const existingExtractRes = await client.query(
-          `SELECT extraction_id FROM extractions WHERE file_id=$1`,
-          [fileId]
-        );
-        if (existingExtractRes.rowCount && existingExtractRes.rowCount > 0) {
-          await client.query(
-            `UPDATE extractions
-                SET extracted_text=$2,
-                    summarized_text=$3,
-                    updated_at=NOW()
-              WHERE file_id=$1`,
-            [fileId, extractedText || null, summary || null]
-          );
-        } else {
-          await client.query(
-            `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-             VALUES ($1,$2,$3)`,
-            [fileId, extractedText || null, summary || null]
-          );
-        }
-      }
-    }
-
-    client.release();
-    return NextResponse.json({ success: true, message: 'Upload updated.' });
-  } catch (error) {
-    console.error('Error updating upload:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error updating upload' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/history\page.tsx
-----------------------------------------
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { TrashIcon } from '@heroicons/react/24/outline';
-import Navbar from '@/components/Navbar';
-
-export interface SessionSummary {
-  session_id: number;
-  session_name: string;
-  created_at: string;
-  file_count: number;
-}
-
-export default function HistoryPage() {
-  const router = useRouter();
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // Fetch user sessions on mount
-  useEffect(() => {
-    const userId = localStorage.getItem('userId');
-    if (!userId) {
-      // Not logged in
-      router.push('/login');
-      return;
-    }
-
-    fetch('/api/sessions', {
-      headers: { 'x-user-id': userId }
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.error) {
-          setError(data.error);
-          return;
-        }
-        setSessions(data.sessions || []);
-      })
-      .catch((err) => {
-        setError(err.message || 'Error fetching sessions');
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [router]);
-
-  // Delete a session
-  async function handleDeleteSession(sessionId: number) {
-    const userId = localStorage.getItem('userId') || '';
-     // First confirmation:
-    if (!confirm('Are you sure you want to delete this session?')) return;
-    // Second confirmation:
-    if (!confirm('This action is permanent and cannot be undone. Continue?')) return;
-
-
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`, {
-        method: 'DELETE',
-        headers: { 'x-user-id': userId }
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Failed to delete session');
-      }
-
-      // Remove it from local state
-      setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        alert('Error deleting session: ' + err.message);
-      } else {
-        alert('Error deleting session');
-      }
-      console.error(err);
-    }
-  }
-
-  if (loading) {
-    return <div className="p-4">Loading sessions...</div>;
-  }
-
-  if (error) {
-    return <div className="p-4 text-red-600">Error: {error}</div>;
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">Your Sessions</h1>
-        {sessions.length === 0 ? (
-          <p>No sessions found.</p>
-        ) : (
-          <ul className="space-y-4">
-            {sessions.map((session) => (
-              <li key={session.session_id} className="border p-4 rounded bg-white flex justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-600">
-                    {session.session_name}
-                  </h2>
-                  <p className="text-sm text-gray-600">
-                    Created: {new Date(session.created_at).toLocaleString()}
-                  </p>
-                  <p className="text-sm text-gray-600">
-                    Files: {session.file_count}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* View Details */}
-                  <button
-                    onClick={() => router.push(`/history/${session.session_id}`)}
-                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                  >
-                    View Details
-                  </button>
-
-                  {/* Trash Icon => Delete Session */}
-                  <button
-                    onClick={() => handleDeleteSession(session.session_id)}
-                    className="p-2 hover:bg-red-50 rounded"
-                    title="Delete Session"
-                  >
-                    <TrashIcon className="w-5 h-5 text-red-600" />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: app/history\[sessionId]\page.tsx
-----------------------------------------
-// app/history/[sessionId]/page.tsx
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import Navbar from '@/components/Navbar';
-import Footer from '@/components/Footer';
-import ReactJson from 'react-json-view';
-import * as XLSX from 'xlsx';
-import { FileNode } from '@/components/FileTree';
-
-// Define the structure of the session data stored in the database.
-export interface SessionData {
-  session_name: string;
-  fileTree?: FileNode[];
-  // You can add other properties (extractedTexts, summaries, chatHistory, etc.) here
-  [key: string]: unknown;
-}
-
-// Define the session structure returned by your API.
-export interface Session {
-  session_data: SessionData;
-  created_at: string;
-  file_count: number;
-}
-
-// A helper function to recursively extract Excel files from the file tree.
-const getExcelFiles = (nodes: FileNode[]): FileNode[] => {
-  let files: FileNode[] = [];
-  nodes.forEach((node) => {
-    if (node.type === 'file' && /\.(xlsx|xls)$/i.test(node.name)) {
-      files.push(node);
-    }
-    if (node.children && node.children.length > 0) {
-      files = files.concat(getExcelFiles(node.children));
-    }
-  });
-  return files;
-};
-
-// Component to preview an Excel file node.
-const ExcelPreview: React.FC<{ node: FileNode }> = ({ node }) => {
-  const [tableData, setTableData] = useState<string[][]>([]);
-  const [error, setError] = useState<string>('');
-
-  useEffect(() => {
-    const parseExcel = async () => {
-      if (!node.base64Data) {
-        setError('No data available');
-        return;
-      }
-      try {
-        // Decode the base64 string into a binary string.
-        const binaryStr = atob(node.base64Data);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        // Parse the workbook using XLSX.
-        const workbook = XLSX.read(bytes, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        // Convert the sheet to an array-of-arrays (each row is an array).
-        const data: (string | number | boolean | null)[][] = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, { header: 1 });
-        const stringData: string[][] = data.map(row => row.map(cell => cell !== null ? cell.toString() : ''));
-        setTableData(stringData);
-      } catch {
-        setError('Error parsing Excel file');
-      }
-    };
-
-    parseExcel();
-  }, [node.base64Data]);
-
-  return (
-    <div className="mb-4">
-      <h3 className="font-semibold text-gray-800">{node.name}</h3>
-      {error ? (
-        <p className="text-red-600">{error}</p>
-      ) : tableData.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="min-w-full border border-gray-300">
-            <tbody>
-              {tableData.slice(0, 10).map((row, rowIndex) => (
-                <tr key={rowIndex} className="border-b border-gray-200">
-                  {row.map((cell, cellIndex) => (
-                    <td
-                      key={cellIndex}
-                      className="px-2 py-1 border-r border-gray-200 text-gray-800"
-                    >
-                      {cell !== undefined ? cell.toString() : ''}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {tableData.length > 10 && (
-            <p className="text-sm text-gray-600 mt-2">Showing first 10 rows</p>
-          )}
-        </div>
-      ) : (
-        <p className="text-gray-800">No data to preview</p>
-      )}
-    </div>
-  );
-};
-
-const SessionDetail: React.FC = () => {
-  const { sessionId } = useParams();
-  const [session, setSession] = useState<Session | null>(null);
-  const [error, setError] = useState<string>('');
-
-// Add this useEffect to fetch heavy data when the component mounts
-useEffect(() => {
-
-  const userId = localStorage.getItem('userId');
-  if (!userId || !sessionId) return;
-
-  const fetchHeavyData = async () => {
-    try {
-      const res = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
-      if (!res.ok) throw new Error('Failed to fetch heavy data');
-      const heavyData = await res.json();
-      // Merge heavy data into session data
-      setSession(prev => prev ? {
-        ...prev,
-        session_data: {
-          ...prev.session_data,
-          extractedTexts: heavyData.extractedTexts,
-          summaries: heavyData.summaries
-        }
-      } : null);
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('An unknown error occurred');
-      }
-    }
-  };
-
-  async function fetchSession() {
-    try {
-      // 1) Minimal session info from the DB
-      const sessRes = await fetch(`/api/sessions/${sessionId}`, {
-        headers: { 'x-user-id': userId || '' },
-      });
-      if (!sessRes.ok) throw new Error('Failed to fetch session');
-      const sessJson = await sessRes.json();
-      // sessJson is { session: { session_id, session_name, created_at, ... } }
-
-      // 2) Heavy data from local file
-      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
-      // If heavy data doesn’t exist, it might be 404. You can handle that gracefully.
-      if (!heavyRes.ok) {
-        console.warn('No heavy data found (maybe not uploaded yet).');
-      }
-      const heavyJson = heavyRes.ok ? await heavyRes.json() : {};
-
-      // 3) Merge them together
-      // Suppose your DB session JSON doesn't store `session_data` by default.
-      // You can create a structure that includes fileTree, chatHistory, etc.
-      setSession({
-        // For example, you can store them like:
-        session_data: {
-          session_name: sessJson.session.session_name,
-          fileTree: heavyJson.extractedTexts ? [] : [], // or reconstruct if you wish
-          // Or you can do more advanced merges if you have them
-          extractedTexts: heavyJson.extractedTexts || {},
-          summaries: heavyJson.summaries || {},
-        },
-        created_at: sessJson.session.created_at,
-        file_count: sessJson.session.file_count || 0,
-      });
-    } catch (err) {
-      console.error('Error fetching session details:', err);
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }
-
-  if (sessionId) {
-    fetchSession();
-    fetchHeavyData();
-  }
-}, [sessionId]);
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
-        <Navbar />
-        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
-          <p className="text-red-600">{error}</p>
-        </main>
-        <Footer />
-      </div>
-    );
-  }
-
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
-        <Navbar />
-        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
-          <p>Loading session details...</p>
-        </main>
-        <Footer />
-      </div>
-    );
-  }
-
-  // Extract Excel files (if any) from the file tree stored in session_data.
-  const excelFiles: FileNode[] = session.session_data.fileTree
-    ? getExcelFiles(session.session_data.fileTree)
-    : [];
-
-  return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
-        <h1 className="text-2xl font-bold mb-6">Session Details</h1>
-        <div className="mb-4">
-          <p>
-            <strong>Name:</strong>{' '}
-            {session.session_data.session_name || 'Untitled Session'}
-          </p>
-          <p>
-            <strong>Created:</strong>{' '}
-            {new Date(session.created_at).toLocaleString()}
-          </p>
-          <p>
-            <strong>Files Count:</strong> {session.file_count}
-          </p>
-        </div>
-
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold mb-2">Session Data</h2>
-          {/* A scrollable, collapsible JSON viewer */}
-          <div className="max-h-96 overflow-y-auto bg-gray-100 p-4 rounded">
-            <ReactJson
-              src={session.session_data}
-              theme="rjv-default"
-              collapsed={2}
-              displayDataTypes={false}
-              style={{ fontSize: '0.875rem' }}
-            />
-          </div>
-        </div>
-
-        {excelFiles.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-xl font-semibold mb-2">Excel Files Preview</h2>
-            {excelFiles.map((file, index) => (
-              <ExcelPreview key={index} node={file} />
-            ))}
-          </div>
-        )}
-      </main>
-      <Footer />
-    </div>
-  );
-};
-
-export default SessionDetail;
-
 ----------------------------------------
 
