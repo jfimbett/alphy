@@ -2,8 +2,14 @@
 import Navbar from '@/components/Navbar';
 import Link from 'next/link';
 import { BarChart, CloudUpload, ShieldCheck } from 'lucide-react';
+import AnalysisPreview from '@/components/AnalysisPreview';
+import TestimonialsSlider from '@/components/TestimonialsSlider';
+import 'slick-carousel/slick/slick.css';
+import 'slick-carousel/slick/slick-theme.css';
 
 export default function Home() {
+  
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
@@ -30,7 +36,7 @@ export default function Home() {
               Book Demo
             </Link>
           </div>
-          
+
           <div className="flex justify-center gap-8 text-gray-600">
             <div className="flex items-center gap-2">
               <CloudUpload className="text-blue-600" size={20} />
@@ -46,6 +52,7 @@ export default function Home() {
             </div>
           </div>
         </div>
+
 
         {/* AI Value Proposition */}
         <div className="bg-white py-16 rounded-2xl shadow-lg mb-24 text-gray-600">
@@ -78,8 +85,8 @@ export default function Home() {
                 </ul>
               </div>
               <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-8">
-                <div className="aspect-video bg-white rounded-lg shadow-md flex items-center justify-center">
-                  [AI Analysis Demo Preview]
+                <div className="aspect-video bg-white rounded-lg shadow-md overflow-hidden">
+                  <AnalysisPreview />
                 </div>
               </div>
             </div>
@@ -104,7 +111,6 @@ export default function Home() {
                 Get Started
               </Link>
             </div>
-
             {/* Pro Tier */}
             <div className="bg-blue-600 p-8 rounded-2xl shadow-lg transform scale-105 relative text-gray-600">
               <div className="absolute top-0 right-0 bg-yellow-400 text-black px-4 py-1 rounded-bl-xl text-sm font-semibold">
@@ -123,7 +129,6 @@ export default function Home() {
                 Start Free Trial
               </Link>
             </div>
-
             {/* Enterprise Tier */}
             <div className="bg-white p-8 rounded-2xl shadow-lg border border-gray-100 hover:shadow-xl transition-shadow text-gray-600">
               <h3 className="text-2xl font-bold mb-4">Enterprise</h3>
@@ -141,6 +146,12 @@ export default function Home() {
             </div>
           </div>
         </div>
+         {/* Testimonials Section #!TODO not really looking nice
+         <section className="my-16 container mx-auto px-4">
+          <h2 className="text-3xl font-bold mb-6 text-center">What Our Customers Say</h2>
+          <TestimonialsSlider />
+        </section>
+        */}
       </main>
     </div>
   );

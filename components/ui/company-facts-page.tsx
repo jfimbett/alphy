@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 const Chart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
 // Adjust these if you have environment variables:
-//const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL || "https://df1c-194-214-160-21.ngrok-free.app";
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
 const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN || "t3stt%40ken";
 
 interface CompanyFacts {
@@ -80,7 +80,6 @@ export function CompanyFactsPage({ cik }: CompanyFactsPageProps) {
       setCompanyFacts(data);
     } catch (error) {
       console.error("Failed to retrieve facts:", error);
-      alert("Error retrieving facts. Check console for details.");
     } finally {
       setLoading(false);
     }

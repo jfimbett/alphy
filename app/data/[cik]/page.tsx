@@ -1,6 +1,5 @@
 // app/data/[cik]/page.tsx
 export const dynamic = "force-dynamic";
-
 import { CompanyFactsPage } from "@/components/ui/company-facts-page";
 
 interface CompanyDataPageProps {
@@ -9,8 +8,10 @@ interface CompanyDataPageProps {
   };
 }
 
-export default function CompanyDataPage({ params }: CompanyDataPageProps) {
-  const { cik } = params;
+
+
+export default async function CompanyDataPage({ params }: CompanyDataPageProps) {
+  const { cik } = await params;
 
   return (
     <div className="min-h-screen bg-gray-50">

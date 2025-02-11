@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
+import AlphyAnimation from '@/components/AlphyAnimation';
 
 export default function Navbar() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -38,7 +39,9 @@ export default function Navbar() {
     <nav className="bg-white shadow">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
         <Link href="/">
-          <span className="font-bold text-xl text-blue-600">AlphaGen</span>
+          {/* Having some issues when reloading the website */}
+          {/*<AlphyAnimation />*/}
+          <span className="text-gray-700 hover:text-blue-600 transition-colors">Alphy</span>
         </Link>
         <div className="flex items-center space-x-4">
           {loggedIn ? (

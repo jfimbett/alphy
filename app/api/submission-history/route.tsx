@@ -2,8 +2,8 @@
 
 import { NextResponse } from "next/server"
 
-const BASE_URL = process.env.EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.EXTERNAL_API_TOKEN
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
 
 export async function GET(request: Request) {
   try {
