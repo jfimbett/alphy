@@ -18,6 +18,10 @@ type ExistingUpload = {
 };
 
 export default function Dashboard() {
+
+  const [selectedModel, setSelectedModel] = useState('local:deepseek-r1:70b');
+
+
   const router = useRouter();
 
   const {
@@ -351,6 +355,33 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
           </div>
         </div>
 
+        {/* Model Selection */}
+        <div className="mb-4 text-gray-800">
+  <label className="block text-sm font-medium mb-1">AI Model</label>
+  <select
+    value={selectedModel}
+    onChange={(e) => setSelectedModel(e.target.value)}
+    className="w-full p-2 border rounded bg-white"
+  >
+    {/* Local Models */}
+    <optgroup label="Local Models" style={{ backgroundImage: `url('https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Logo_of_Hugging_Face.svg/1200px-Logo_of_Hugging_Face.svg.png')`, backgroundRepeat: 'no-repeat', backgroundPosition: 'left center', paddingLeft: '24px' }}>
+      <option value="local:deepseek-r1:70b">DeepSeek R1 70B (Local)</option>
+      <option value="local:llama2">Llama 2 (Local)</option>
+      <option value="local:falcon-40b">Falcon 40B (Local)</option>
+      <option value="local:mistral-7b">Mistral 7B (Local)</option>
+      <option value="local:stablelm-zephyr">StableLM Zephyr (Local)</option>
+    </optgroup>
+
+
+    <optgroup label="OpenAI Models" style={{ backgroundImage: `url('https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/1200px-OpenAI_Logo.svg.png')`, backgroundRepeat: 'no-repeat', backgroundPosition: 'left center', paddingLeft: '24px' }}>
+      <option value="openai:gpt-3.5-turbo">GPT-3.5 Turbo (OpenAI)</option>
+      <option value="openai:gpt-4.0-turbo">GPT-4.0 Turbo (OpenAI)</option>
+      <option value="openai:codex-2.0-turbo">Codex 2.0 Turbo (OpenAI)</option>
+    </optgroup>
+  </select>
+</div>
+   
+
         {/* If we have a file tree, show Analyze + Save Buttons */}
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
@@ -562,7 +593,8 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
                 selectedFileText: extractedTexts[selectedFile?.fullPath || ''],
                 globalContext: Array.from(highlightedFiles)
                   .map((path) => extractedTexts[path])
-                  .join('\n\n')
+                  .join('\n\n'),
+                  model: selectedModel
               })
             }
             className="flex gap-2 text-gray-600"

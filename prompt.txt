@@ -20,6 +20,10 @@ type ExistingUpload = {
 };
 
 export default function Dashboard() {
+
+  const [selectedModel, setSelectedModel] = useState('local:deepseek-r1:70b');
+
+
   const router = useRouter();
 
   const {
@@ -353,6 +357,33 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
           </div>
         </div>
 
+        {/* Model Selection */}
+        <div className="mb-4 text-gray-800">
+  <label className="block text-sm font-medium mb-1">AI Model</label>
+  <select
+    value={selectedModel}
+    onChange={(e) => setSelectedModel(e.target.value)}
+    className="w-full p-2 border rounded bg-white"
+  >
+    {/* Local Models */}
+    <optgroup label="Local Models" style={{ backgroundImage: `url('https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Logo_of_Hugging_Face.svg/1200px-Logo_of_Hugging_Face.svg.png')`, backgroundRepeat: 'no-repeat', backgroundPosition: 'left center', paddingLeft: '24px' }}>
+      <option value="local:deepseek-r1:70b">DeepSeek R1 70B (Local)</option>
+      <option value="local:llama2">Llama 2 (Local)</option>
+      <option value="local:falcon-40b">Falcon 40B (Local)</option>
+      <option value="local:mistral-7b">Mistral 7B (Local)</option>
+      <option value="local:stablelm-zephyr">StableLM Zephyr (Local)</option>
+    </optgroup>
+
+
+    <optgroup label="OpenAI Models" style={{ backgroundImage: `url('https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/1200px-OpenAI_Logo.svg.png')`, backgroundRepeat: 'no-repeat', backgroundPosition: 'left center', paddingLeft: '24px' }}>
+      <option value="openai:gpt-3.5-turbo">GPT-3.5 Turbo (OpenAI)</option>
+      <option value="openai:gpt-4.0-turbo">GPT-4.0 Turbo (OpenAI)</option>
+      <option value="openai:codex-2.0-turbo">Codex 2.0 Turbo (OpenAI)</option>
+    </optgroup>
+  </select>
+</div>
+   
+
         {/* If we have a file tree, show Analyze + Save Buttons */}
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
@@ -564,7 +595,8 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
                 selectedFileText: extractedTexts[selectedFile?.fullPath || ''],
                 globalContext: Array.from(highlightedFiles)
                   .map((path) => extractedTexts[path])
-                  .join('\n\n')
+                  .join('\n\n'),
+                  model: selectedModel
               })
             }
             className="flex gap-2 text-gray-600"
@@ -677,7 +709,7 @@ export function useChat() {
   const handleChatSubmit = async ({
     e,
     selectedFileText,
-    globalContext,
+    globalContext
   }: {
     e: React.FormEvent;
     selectedFileText: string | undefined;
@@ -1507,13 +1539,16 @@ export async function GET(request: Request) {
 
 ----------------------------------------
 
-File: app/api\llm\route.ts
+File: app/api\llm\route.tsx
 ----------------------------------------
 // app/api/llm/route.ts
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 export const dynamic = 'force-dynamic'; // Required for streaming/async operations
 
 export async function POST(req: Request) {
-  const { prompt, context, history } = await req.json();
+  const { prompt, context, history, model } = await req.json();
 
   // Validate parameters
   if (!prompt || typeof prompt !== 'string') {
@@ -1521,16 +1556,18 @@ export async function POST(req: Request) {
   }
 
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+  const userId = req.headers.get('x-user-id');
 
   if (DEVELOPMENT) {
     console.log('Using mock LLM responses');
     await new Promise(resolve => setTimeout(resolve, 500));
     return Response.json({ 
-      content: "[MOCK RESPONSE] This is a development mock response...",
+      content: `[MOCK RESPONSE] ${model} response...`,
       tokensUsed: 42
     });
   }
 
+  
 
   // Ensure history is an array and limit to last 2 messages
   const limitedHistory = Array.isArray(history) 
@@ -1539,27 +1576,71 @@ export async function POST(req: Request) {
 
   // Real implementation
   try {
-    const res = await fetch('http://localhost:11434/api/chat', {
+    // const res = await fetch('http://localhost:11434/api/chat', {
+    //   method: 'POST',
+    //   headers: { 'Content-Type': 'application/json' },
+    //   body: JSON.stringify({
+    //     model: "deepseek-r1:70b",
+    //     stream: false,
+    //     temperature: 0.0,
+    //     messages: [
+    //       { role: "system", content: context || "" }, // Handle undefined context
+    //       ...limitedHistory,
+    //       { role: "user", content: prompt }
+    //     ]
+    //   }),
+    // });
+
+    const { data: apiKeys } = await supabase
+    .from('api_keys')
+    .select('provider, decrypted_key')
+    .eq('user_id', userId);
+
+  const keyMap = Object.fromEntries(
+    apiKeys?.map((k: { provider: string; decrypted_key: string }) => [k.provider, k.decrypted_key]) || []
+  );
+
+  let response;
+  if (model.startsWith('local:')) {
+    // Local model via Ollama
+    response = await fetch('http://localhost:11434/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "deepseek-r1:70b",
+        model: model.replace('local:', ''),
         stream: false,
-        temperature: 0.0,
         messages: [
-          { role: "system", content: context || "" }, // Handle undefined context
-          ...limitedHistory,
+          { role: "system", content: context || "" },
+          ...history,
           { role: "user", content: prompt }
         ]
       }),
     });
+  } else if (model.startsWith('openai:')) {
+    // OpenAI API
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${keyMap.openai}`
+      },
+      body: JSON.stringify({
+        model: model.replace('openai:', ''),
+        messages: [
+          { role: "system", content: context || "" },
+          ...history,
+          { role: "user", content: prompt }
+        ]
+      })
+    });
+  }
 
-    if (!res.ok) throw new Error(`LLM API Error: ${res.statusText}`);
+    if (!response || !response.ok) throw new Error(`LLM API Error: ${response?.statusText || 'No response'}`);
     
-    const data = await res.json();
+    const data = await response.json();
     return Response.json({
-      content: data.message?.content || "",
-      tokensUsed: data.tokens_used || 0
+      content: data.choices?.[0]?.message?.content || data.message?.content || "",
+      tokensUsed: data.usage?.total_tokens || 0
     });
   } catch (error) {
     console.error('LLM Processing Error:', error);

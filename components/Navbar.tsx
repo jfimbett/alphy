@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { UserCircleIcon } from '@heroicons/react/24/outline';
+import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 
 export default function Navbar() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -49,8 +49,10 @@ export default function Navbar() {
               <Link href="/history">
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
               </Link>
-
-
+              {/* Settings icon */}
+              <Link href="/settings" title="Settings">
+                <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />
+              </Link>
               <div className="flex items-center space-x-2">
                 <UserCircleIcon className="w-8 h-8 text-blue-600" />
                 <span className="text-gray-700">{userEmail}</span>

@@ -49,6 +49,7 @@
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
     "stream-browserify": "^3.0.0",
+    "supabase": "^2.9.6",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

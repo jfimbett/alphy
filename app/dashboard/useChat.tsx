@@ -19,10 +19,12 @@ export function useChat() {
     e,
     selectedFileText,
     globalContext,
+    model
   }: {
     e: React.FormEvent;
     selectedFileText: string | undefined;
     globalContext: string | undefined;
+    model?: string;
   }) => {
     e.preventDefault();
     if (!chatMessage.trim()) return;
@@ -40,13 +42,16 @@ export function useChat() {
       }
 
       const promptWithContext = context
-        ? chatMessage + '\n\nContext:\n\n' + context
-        : chatMessage;
+      ? `${chatMessage}\n\nContext:\n\n${context}`
+      : chatMessage;
 
       const res = await fetch('/api/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptWithContext }),
+        body: JSON.stringify({ prompt: promptWithContext,
+          model,
+          history: newHistory
+         }),
       });
 
       if (!res.ok) throw new Error('Chat failed');

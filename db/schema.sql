@@ -66,3 +66,14 @@ CREATE TABLE IF NOT EXISTS uploads (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
+
+-- Create api_keys table
+CREATE TABLE api_keys (
+    id SERIAL PRIMARY KEY,
+    user_id UUID REFERENCES auth.users NOT NULL,
+    provider TEXT NOT NULL,
+    decrypted_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, provider)
+);
