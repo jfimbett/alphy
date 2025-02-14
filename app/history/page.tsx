@@ -104,7 +104,7 @@ export default function HistoryPage() {
                     Created: {new Date(session.created_at).toLocaleString()}
                   </p>
                   <p className="text-sm text-gray-600">
-                    Files: {session.file_count}
+                    {/*Files: {session.file_count}*/}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

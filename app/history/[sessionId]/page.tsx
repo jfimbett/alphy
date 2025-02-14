@@ -230,7 +230,7 @@ useEffect(() => {
             {new Date(session.created_at).toLocaleString()}
           </p>
           <p>
-            <strong>Files Count:</strong> {session.file_count}
+           {/* <strong>Files Count:</strong> {session.file_count}*/}
           </p>
         </div>
 

@@ -41,7 +41,7 @@ export default function Navbar() {
         <Link href="/">
           {/* Having some issues when reloading the website */}
           {/*<AlphyAnimation />*/}
-          <span className="text-gray-700 hover:text-blue-600 transition-colors">Alphy</span>
+          <span className="text-gray-900 hover:text-blue-800 transition-colors font-bold text-xl">Alphy</span>
         </Link>
         <div className="flex items-center space-x-4">
           {loggedIn ? (
