@@ -11,6 +11,7 @@ import { useChat } from './useChat';
 import { useDropzone } from 'react-dropzone';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { SessionSummary } from '@/app/history/page';
+import { CompanyInfoComponent } from '@/components/CompanyInfoComponent';
 
 type ExistingUpload = {
   upload_id: number;
@@ -31,6 +32,7 @@ export default function Dashboard() {
     setExtractedTexts,
     summaries,
     setSummaries,
+    extractedCompanies,
     isAnalyzing,
     processingPhase,
     progress,
@@ -428,6 +430,8 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
                       `Converting files to text: ${processedFiles}/${totalFiles} (${progress}%)`}
                     {processingPhase === 'summarizing' &&
                       `Summarizing files: ${processedFiles}/${totalFiles} (${progress}%)`}
+                    {processingPhase === 'extracting_companies' &&
+                  `Extracting company data: ${processedFiles}/${totalFiles} (${progress}%)`}
                   </span>
                 </div>
               )}
@@ -504,6 +508,21 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
                     <ExtractedTextContent content={extractedTexts[selectedFile.fullPath || '']} />
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Extracted Companies Section */}
+            {extractedCompanies[selectedFile.fullPath || '']?.length > 0 && (
+              <div className="mt-8 border-t pt-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
+                    Companies
+                  </span>
+                  Extracted Entities
+                </h4>
+                <CompanyInfoComponent 
+                  companies={extractedCompanies[selectedFile.fullPath || '']} 
+                />
               </div>
             )}
 

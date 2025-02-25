@@ -4,9 +4,8 @@ import os
 def main():
     # List the folder names (located in the same directory as this script)
     folders = [
-               'app/history',
-               'app/api/sessions',
-               'app/api/session-file',
+               'app/dashboard',
+               'app/api/llm'
                ]  
 
     # Output file where all file info will be saved

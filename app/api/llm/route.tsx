@@ -40,8 +40,14 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           model: model.replace('local:', ''),
           stream: false,
+          format: body.format === 'json' ? 'json' : undefined,
           messages: [
-            { role: 'system', content: context || '' },
+            { 
+              role: 'system', 
+              content: body.format === 'json' ? 
+                'Return response as valid JSON array. No markdown or extra text.' : 
+                (context || '')
+            },
             ...(Array.isArray(history) ? history : []),
             { role: 'user', content: prompt },
           ],
@@ -84,8 +90,14 @@ export async function POST(req: Request) {
         },
         body: JSON.stringify({
           model: model.replace('openai:', ''),
+          response_format: body.format === 'json' ? { type: "json_object" } : undefined,
           messages: [
-            { role: 'system', content: context || '' },
+            { 
+              role: 'system', 
+              content: body.format === 'json' ? 
+                'Return response as valid JSON array. No markdown or extra text.' : 
+                (context || '')
+            },
             ...(Array.isArray(history) ? history : []),
             { role: 'user', content: prompt }
           ]

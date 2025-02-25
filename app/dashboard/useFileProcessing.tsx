@@ -5,6 +5,8 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import * as XLSX from 'xlsx';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { FileNode } from '@/components/FileTree';
+// Add to existing imports
+import { CompanyInfo } from '@/app/types';
 
 // IMPORTANT: pdf.js worker config
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
@@ -40,13 +42,17 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
+  // Add to the existing state
+  const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
+
+
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
   const [summaries, setSummaries] = useState<Record<string, string>>({});
 
   // For progress indicators
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [processingPhase, setProcessingPhase] = useState<'extracting' | 'summarizing' | 'idle'>('idle');
+  const [processingPhase, setProcessingPhase] = useState<'extracting' | 'summarizing' | 'idle' | 'extracting_companies'>('idle');
   const [progress, setProgress] = useState(0);
   const [totalFiles, setTotalFiles] = useState(0);
   const [processedFiles, setProcessedFiles] = useState(0);
@@ -299,13 +305,74 @@ Recall that the text could be written in different languages other than English.
       }
 
       setSummaries(newSummaries);
+
+
+      setProcessingPhase('extracting_companies');
+      setProgress(0);
+      setProcessedFiles(0);
+
+      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
+  let companyCount = 0;
+
+  for (const [fullPath, text] of textEntries) {
+    try {
+      const prompt = `Extract company information from the text below. Include name, sector, 
+  profits, assets, and available years. Format as JSON array with objects containing: 
+  { name: string, sector?: string, profits: { [year: string]: number }, 
+  assets: { [year: string]: number }, years: number[] }. Use null for missing values.
+  \n\nText: ${text.substring(0, 3000)}`;
+
+      if (DEVELOPMENT) {
+        newExtractedCompanies[fullPath] = [{
+          name: 'Example Corp',
+          sector: 'Technology',
+          profits: { '2022': 1500000, '2023': 2000000 },
+          assets: { '2022': 5000000, '2023': 6000000 },
+          years: [2022, 2023]
+        }];
+      } else {
+        const res = await fetch('/api/llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            context: text.substring(0, 2000),
+            history: [],
+            model,
+            format: 'json'
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          try {
+            const companies: CompanyInfo[] = JSON.parse(data.content);
+            newExtractedCompanies[fullPath] = companies;
+          } catch (e) {
+            console.error('Failed to parse company data:', e);
+            newExtractedCompanies[fullPath] = [];
+          }
+        }
+      }
     } catch (error) {
-      console.error('Processing error:', error);
-    } finally {
-      setIsAnalyzing(false);
-      setProcessingPhase('idle');
+      newExtractedCompanies[fullPath] = [];
     }
-  };
+
+    companyCount++;
+    setProcessedFiles(companyCount);
+    setProgress(Math.round((companyCount / textEntries.length) * 100));
+  }
+
+  setExtractedCompanies(newExtractedCompanies);
+
+
+      } catch (error) {
+        console.error('Processing error:', error);
+      } finally {
+        setIsAnalyzing(false);
+        setProcessingPhase('idle');
+      }
+    };
 
   // ======================
   // SELECT/DESELECT ALL
@@ -361,6 +428,8 @@ Recall that the text could be written in different languages other than English.
     analyzeFiles,
     toggleAllFiles,
     buildFileTree,
-    saveHeavyData, // <- Add this to your return object
+    saveHeavyData, 
+    extractedCompanies,
+    setExtractedCompanies
   };
 }
