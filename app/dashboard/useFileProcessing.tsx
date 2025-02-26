@@ -7,6 +7,7 @@ import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { FileNode } from '@/components/FileTree';
 // Add to existing imports
 import { CompanyInfo } from '@/app/types';
+import { requestToBodyStream } from 'next/dist/server/body-streams';
 
 // IMPORTANT: pdf.js worker config
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
@@ -42,10 +43,10 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
-  // Add to the existing state
+
+  
+  const [rawResponses, setRawResponses] = useState<Record<string, string>>({});
   const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
-
-
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
   const [summaries, setSummaries] = useState<Record<string, string>>({});
@@ -270,9 +271,20 @@ export function useFileProcessing() {
 
       for (const [fullPath, text] of textEntries) {
         try {
-          const prompt = `Summarize the following text in one paragraph,
-focusing on key financial metrics, risks, and opportunities.
-Recall that the text could be written in different languages other than English.\n\n${text}`;
+          const prompt = `You are a Summarization Assistant. Your job is to read the text below—written in any language—and produce a single-paragraph summary in clear, fluent English. Focus on the following:
+
+              Key financial metrics (e.g., revenue, assets, profitability)
+              Risks (e.g., market risks, operational risks)
+              Opportunities (e.g., potential growth, strategic advantages)
+
+          Instructions:
+
+              Write exactly one paragraph.
+              Emphasize the most relevant financial details, along with notable risks and opportunities.
+              Avoid minor or irrelevant information.
+              Output only the summarized text, with no extra commentary, headings, or disclaimers.
+
+          Document Text: ${text}`;
 
           if (DEVELOPMENT) {
             newSummaries[fullPath] = 'Some random text for development purposes...';
@@ -282,13 +294,14 @@ Recall that the text could be written in different languages other than English.
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 prompt,
-                context: text.substring(0, 2000) || '',
                 history: [],
                 model: model,
+                requestType: 'summarize',
               }),
             });
 
             if (!res.ok) {
+              console.error('Summary API error:', res.statusText);
               newSummaries[fullPath] = 'Summary failed: API error';
             } else {
               const data = await res.json();
@@ -311,61 +324,133 @@ Recall that the text could be written in different languages other than English.
       setProgress(0);
       setProcessedFiles(0);
 
-      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
-  let companyCount = 0;
+      // We extract first the variables that are present
 
-  for (const [fullPath, text] of textEntries) {
-    try {
-      const prompt = `Extract company information from the text below. Include name, sector, 
-  profits, assets, and available years. Format as JSON array with objects containing: 
-  { name: string, sector?: string, profits: { [year: string]: number }, 
-  assets: { [year: string]: number }, years: number[] }. Use null for missing values.
-  \n\nText: ${text.substring(0, 3000)}`;
+      let variables  = '';
 
-      if (DEVELOPMENT) {
-        newExtractedCompanies[fullPath] = [{
-          name: 'Example Corp',
-          sector: 'Technology',
-          profits: { '2022': 1500000, '2023': 2000000 },
-          assets: { '2022': 5000000, '2023': 6000000 },
-          years: [2022, 2023]
-        }];
-      } else {
+      for (const [fullPath, text] of textEntries) {
+        const variables_prompt = `
+        Out of the following text, identify what financial varables are referenced, the text can be written in languages different than english, return me only the list of variables without the values
+
+        ["var1", "var2", ...]
+
+        here is the text, return the name of the variables in english, also be consistent across names and try not to duplicate them, Im looking mostly for accounting variables
+        Also return the names of the variables in lower case and with underscores instead of spaces.
+
+
+        ${text}
+        `
+
         const res = await fetch('/api/llm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt,
-            context: text.substring(0, 2000),
-            history: [],
-            model,
-            format: 'json'
+            prompt: variables_prompt,
+            model: model,
+            format: 'json',
+            requestType: 'extract',
           }),
         });
 
+        // append the variables to the variables string
         if (res.ok) {
           const data = await res.json();
-          try {
-            const companies: CompanyInfo[] = JSON.parse(data.content);
-            newExtractedCompanies[fullPath] = companies;
-          } catch (e) {
-            console.error('Failed to parse company data:', e);
-            newExtractedCompanies[fullPath] = [];
-          }
+          const contentWithFence = data.content || '';
+          const cleaned = contentWithFence
+            .replace(/```json\s*/i, '')
+            .replace(/```/g, '')
+            .trim();
+
+          variables += cleaned;
         }
       }
-    } catch (error) {
-      newExtractedCompanies[fullPath] = [];
-    }
-
-    companyCount++;
-    setProcessedFiles(companyCount);
-    setProgress(Math.round((companyCount / textEntries.length) * 100));
-  }
-
-  setExtractedCompanies(newExtractedCompanies);
 
 
+      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
+      let companyCount = 0;
+      
+      for (const [fullPath, text] of textEntries) {
+        try {
+          // Simpler extraction prompt, no repeated quotes
+          const extractionPrompt = `
+      You are an Information Extraction Assistant. 
+      Your task is to read the given text (which may appear in any language) and extract 
+      any company-level financial data into a well-structured JSON array. 
+      There could be many be multiple companies mentioned, so please generate an array entry for each 
+      distinct company. These are the potential fields you may encounter (not necessarily all will be present, nor they will be in english)
+      
+      Variables:
+      ${variables}
+
+
+Rules:
+
+    Output ONLY valid JSON: Do not include markdown, explanations, or any text outside the JSON.
+    Use EXACT values from the text (including any currency symbols) for numeric fields.
+    Skip any fields that are not present in the text (do not output null or empty strings).
+    If multiple statements for different years are found, list all those years in the "years" array and include the corresponding values in their respective objects (e.g., "profits", "assets", etc.).
+    If multiple companies are mentioned in the text, create a separate object for each company.
+    Do not include any additional text or explanation outside of the JSON array.
+
+Example Output (This is just an illustrative example, not tied to any specific document): [ { "name": "Example Corporation Inc.", "org_number": "987654321", "sector": "Retail", "years": ["2021", "2020"], "profits": { "2021": "USD 1,000,000", "2020": "USD 950,000" }, "assets": { "2021": "USD 5,000,000", "2020": "USD 4,500,000" }, "revenue": { "2021": "USD 3,000,000", "2020": "USD 2,700,000" } } ]
+
+Document Text:\n\n ${text}`;
+      
+          if (DEVELOPMENT) {
+            newExtractedCompanies[fullPath] = [{
+              name: 'Example Corp',
+              sector: 'Technology',
+              profits: { '2022': 1500000, '2023': 2000000 },
+              assets: { '2022': 5000000, '2023': 6000000 },
+              years: [2022, 2023]
+            }];
+          } else {
+            const res = await fetch('/api/llm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: extractionPrompt,
+                model: model,
+                format: 'json',
+                requestType: 'extract',
+              }),
+            });
+      
+            if (res.ok) {
+              const data = await res.json();
+              // data.content might have triple backticks, so remove them:
+              const contentWithFence = data.content || '';
+              const cleaned = contentWithFence
+                .replace(/```json\s*/i, '')
+                .replace(/```/g, '')
+                .trim();
+      
+                const rawResponse = data.content;
+                setRawResponses(prev => ({...prev, [fullPath]: rawResponse}));
+
+              try {
+                // Expecting an array
+                const companies: CompanyInfo[] = JSON.parse(cleaned);
+                newExtractedCompanies[fullPath] = companies;
+              } catch (e) {
+                console.error('Failed to parse company data:', e);
+                newExtractedCompanies[fullPath] = [];
+              }
+            } else {
+              newExtractedCompanies[fullPath] = [];
+            }
+          }
+        } catch (error) {
+          newExtractedCompanies[fullPath] = [];
+        }
+      
+        companyCount++;
+        setProcessedFiles(companyCount);
+        setProgress(Math.round((companyCount / textEntries.length) * 100));
+      }
+      
+      setExtractedCompanies(newExtractedCompanies);
+      
       } catch (error) {
         console.error('Processing error:', error);
       } finally {
@@ -388,48 +473,35 @@ Recall that the text could be written in different languages other than English.
   };
 
    // Example snippet after analysis completes OR on "Save Session":
-   async function saveHeavyData(sessionId: string) {
+   const saveHeavyData = async (
+    sessionId: string,
+    heavyData: {
+      fileTree: FileNode[];
+      extractedTexts: Record<string, string>;
+      summaries: Record<string, string>;
+      extractedCompanies: Record<string, CompanyInfo[]>;
+    }
+  ) => {
     try {
       const res = await fetch('/api/store-heavy-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          heavyData: {
-            fileTree,
-            extractedTexts,
-            summaries,
-          },
+          heavyData,
         }),
       });
-      if (!res.ok) {
-        throw new Error('Failed to save heavy data');
-      }
-      console.log('Heavy data saved successfully');
+      if (!res.ok) throw new Error('Failed to save heavy data');
+     
     } catch (error) {
       console.error(error);
+      throw error;
     }
-  }
+  };
 
-  return {
-    fileTree,
-    setFileTree,
-    extractedTexts,
-    setExtractedTexts,
-    summaries,
-    setSummaries,
-    isAnalyzing,
-    processingPhase,
-    progress,
-    totalFiles,
-    processedFiles,
-    processZip,
-    processFolder,
-    analyzeFiles,
-    toggleAllFiles,
-    buildFileTree,
-    saveHeavyData, 
-    extractedCompanies,
-    setExtractedCompanies
+  return { fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, 
+    isAnalyzing, processingPhase, progress, totalFiles, processedFiles, processZip, 
+    processFolder, analyzeFiles, toggleAllFiles, buildFileTree, saveHeavyData, 
+    extractedCompanies, setExtractedCompanies, rawResponses, setRawResponses
   };
 }

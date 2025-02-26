@@ -3,9 +3,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';       
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';        // for rendering math
+
 
 // If you also want syntax highlighting for code blocks:
 // import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -54,11 +52,8 @@ export const SummaryContent: React.FC<SummaryContentProps> = ({ content }) => {
   return (
     <div className="prose max-w-none text-gray-700">
       {/* ANSWER as Markdown */}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        // components={markdownComponents} // if you want code syntax
-      >
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      
         {answer}
       </ReactMarkdown>
 
@@ -81,10 +76,7 @@ export const SummaryContent: React.FC<SummaryContentProps> = ({ content }) => {
           {showThinking && (
             <div className="mt-2 p-3 bg-green-100 rounded-lg text-sm text-green-700 justify-center">
               {/* THINKING as Markdown */}
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-              >
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {thinking}
               </ReactMarkdown>
             </div>

@@ -21,14 +21,14 @@ export function useChat() {
     globalContext,
     model
   }: {
-    e: React.FormEvent;
-    selectedFileText: string | undefined;
-    globalContext: string | undefined;
-    model?: string;
+    e: React.FormEvent<HTMLFormElement>;
+    selectedFileText: string;
+    globalContext: string;
+    model: string;
   }) => {
     e.preventDefault();
     if (!chatMessage.trim()) return;
-
+  
     setIsChatLoading(true);
     const newHistory = [...chatHistory, { role: 'user', content: chatMessage }];
 
@@ -41,30 +41,34 @@ export function useChat() {
         context = globalContext.slice(0, 5000);
       }
 
-
-
       const res = await fetch('/api/llm', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' ,
+        headers: { 
+          'Content-Type': 'application/json' ,
           'x-user-id': localStorage.getItem('userId') || ''
         },
-        body: JSON.stringify({ prompt: chatMessage,
+        body: JSON.stringify({ 
+          prompt: chatMessage,
           context: context,
           history: newHistory,
           model: model,
+          format: contextType === 'global' ? 'json' : undefined
          }),
       });
 
-      if (!res.ok) throw new Error('Chat failed');
+  
       const data = await res.json();
-
-      setChatHistory([
-        ...newHistory,
-        { role: 'assistant', content: data.content },
-      ]);
+      if (!res.ok) throw new Error(data.error || 'Chat failed');
+  
+      setChatHistory([...newHistory, { role: 'assistant', content: data.content }]);
       setChatMessage('');
+      
     } catch (error) {
       console.error('Chat Error:', error);
+      setChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: `Error: ${(error as Error).message} - Please try again`
+      }]);
     } finally {
       setIsChatLoading(false);
     }

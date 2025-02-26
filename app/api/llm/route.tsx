@@ -2,24 +2,29 @@
 import { NextResponse } from 'next/server'
 import pool from '@/utils/db';
 
-export const dynamic = 'force-dynamic'; // Required for streaming/async operations
+export const dynamic = 'force-dynamic';
 
-
+interface DeepSeekError {
+  error: {
+    message: string;
+    type: string;
+    code: string;
+  };
+}
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { prompt, context, history, model } = body || {};
+  const { prompt, context, history, model, format, requestType } = body || {};
 
   if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: "Invalid prompt" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid prompt" }, { status: 300 });
   }
 
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
   const userId = req.headers.get('x-user-id');
 
-  // === If in dev mode, return a mock response immediately
   if (DEVELOPMENT) {
-    console.log('Using mock LLM responses');
+   
     await new Promise(res => setTimeout(res, 500));
     return NextResponse.json({
       content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
@@ -28,110 +33,89 @@ export async function POST(req: Request) {
   }
 
   try {
-    let response: Response | null = null;
-
-    // --------------------------------------------------------------------
-    // 1) LOCAL MODEL (no API key needed)
-    // --------------------------------------------------------------------
-    if (model?.startsWith('local:')) {
-      response = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: model.replace('local:', ''),
-          stream: false,
-          format: body.format === 'json' ? 'json' : undefined,
-          messages: [
-            { 
-              role: 'system', 
-              content: body.format === 'json' ? 
-                'Return response as valid JSON array. No markdown or extra text.' : 
-                (context || '')
-            },
-            ...(Array.isArray(history) ? history : []),
-            { role: 'user', content: prompt },
-          ],
-        }),
-      });
-    }
-
-    // --------------------------------------------------------------------
-    // 2) OPENAI MODEL (must fetch user’s openai key from DB)
-    // --------------------------------------------------------------------
-    else if (model?.startsWith('openai:')) {
-      // Query the DB for the user’s key
-      const apiKeyRes = await pool.query(
-        `SELECT provider, decrypted_key 
-         FROM api_keys 
-         WHERE user_id = $1`,
-        [userId]
-      );
-      const keyMap = Object.fromEntries(
-        apiKeyRes.rows.map((row: { provider: string; decrypted_key: string }) => [
-          row.provider,
-          row.decrypted_key
-        ])
-      );
-
-      // If no openai key found for this user, handle that gracefully
-      const openaiKey = keyMap.openai;
-      if (!openaiKey) {
+    
+    if (model?.startsWith('deepseek:')) {
+      const deepseekKey = process.env.DEEPSEEK_API_KEY;
+      if (!deepseekKey) {
+        console.error('DeepSeek API key missing');
         return NextResponse.json(
-          { error: 'No OpenAI API key found for this user' },
-          { status: 400 }
+          { error: 'DeepSeek API key not configured' },
+          { status: 500 }
         );
       }
 
-      response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const modelName = model.replace('deepseek:', '');
+      const messages = [
+        { role: 'system', content: context || 'You are a helpful assistant.' },
+        ...(Array.isArray(history) ? history : []),
+        { role: 'user', content: prompt }
+      ];
+
+      const requestPayload = {
+        model: modelName,
+        messages,
+        temperature: 0.1,
+        max_tokens: 8000,
+        stream: false,
+        //response_format: format === 'json' ? { type: 'json_object' } : undefined
+      };
+
+      const startTime = Date.now();
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiKey}`
+          'Authorization': `Bearer ${deepseekKey}`
         },
-        body: JSON.stringify({
-          model: model.replace('openai:', ''),
-          response_format: body.format === 'json' ? { type: "json_object" } : undefined,
-          messages: [
-            { 
-              role: 'system', 
-              content: body.format === 'json' ? 
-                'Return response as valid JSON array. No markdown or extra text.' : 
-                (context || '')
-            },
-            ...(Array.isArray(history) ? history : []),
-            { role: 'user', content: prompt }
-          ]
-        })
+        body: JSON.stringify(requestPayload)
       });
+
+      const responseTime = Date.now() - startTime;
+      const responseText = await response.text();
+      
+      
+
+      if (!response.ok) {
+        console.error('DeepSeek API Error Details:', {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseText
+        });
+        return NextResponse.json(
+          { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
+          { status: 500 }
+        );
+      }
+
+      try {
+        const data = JSON.parse(responseText);
+        return NextResponse.json({
+          content: data.choices[0].message.content,
+          tokensUsed: data.usage?.total_tokens || 0
+        });
+      } catch (parseError) {
+        console.error('Response JSON Parse Error:', parseError);
+        return NextResponse.json(
+          { error: 'Failed to parse API response', response: responseText },
+          { status: 500 }
+        );
+      }
     }
 
-    // --------------------------------------------------------------------
-    // 3) If model is neither local nor openai, handle as error or fallback
-    // --------------------------------------------------------------------
-    else {
-      return NextResponse.json(
-        { error: `Unknown model type: ${model}` },
-        { status: 400 }
-      );
+    if (model?.startsWith('openai:')) {
+      // commented for now
     }
 
-    // If no response from above calls, error
-    if (!response) {
-      throw new Error('No response from LLM fetch');
-    }
-    if (!response.ok) {
-      throw new Error(`LLM API Error: ${response.statusText || 'No response'}`);
-    }
-
-    // Parse JSON from the LLM response
-    const data = await response.json();
-    return NextResponse.json({
-      content: data.choices?.[0]?.message?.content || data.message?.content || "",
-      tokensUsed: data.usage?.total_tokens || 0
-    });
+    return NextResponse.json(
+      { error: 'Unsupported model provider' },
+      { status: 400 }
+    );
 
   } catch (error) {
     console.error('LLM Processing Error:', error);
-    return NextResponse.json({ error: "LLM processing failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: 'LLM processing failed', details: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
   }
 }
