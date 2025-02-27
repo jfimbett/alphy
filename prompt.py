@@ -5,8 +5,9 @@ def main():
     # List the folder names (located in the same directory as this script)
     folders = [
                'app/dashboard',
+               'app/history',
                'app/api',
-               'components'
+               'db'
                ]  
 
     # Output file where all file info will be saved

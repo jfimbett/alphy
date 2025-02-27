@@ -43,10 +43,10 @@ export default function Dashboard() {
   // ---------------------------
   const {
     fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, extractedCompanies, 
-    rawResponses,
+    rawResponses, setRawResponses,
     isAnalyzing, processingPhase, progress, totalFiles, 
     processedFiles, processZip, processFolder, analyzeFiles, 
-    toggleAllFiles, saveHeavyData,
+    toggleAllFiles, saveHeavyData, consolidatedCompanies
   } = useFileProcessing();
 
   // ---------------------------
@@ -83,15 +83,71 @@ export default function Dashboard() {
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
 
-  // Print to console the variables that might be used later
-  console.log(
-    fetchingUploads,
-    existingUploadId,
-    selectedUploadOption,
-    existingUploads,
-    currentSessionId,
-    currentZipName
-  );
+  // consolidating information
+  const [isConsolidating, setIsConsolidating] = useState(false);
+
+  const handleConsolidateCompanies = async () => {
+    if (!currentSessionId) {
+      alert('Please save the session first')
+      return
+    }
+  
+    setIsConsolidating(true)
+    try {
+      // Prepare consolidation prompt
+      const consolidationPrompt = `Consolidate all company information from these documents into a structured JSON format. Follow these rules:
+      1. Group information by company name
+      2. Standardize variable names (snake_case, English)
+      3. Split currency and values (e.g., "NOK 28.0m" → {value: 28.0, currency: "NOK", unit: "m"})
+      4. Maintain all dates associated with each company
+      5. Remove duplicates
+      
+      Output format: [{
+        "name": "Company Name",
+        "variables": {
+          "variable_name": { "value": number, "currency": string, "unit": string }
+        },
+        "dates": string[]
+      }]
+      
+      Raw data: ${JSON.stringify(rawResponses)}`
+  
+      // Call LLM API
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: consolidationPrompt,
+          model: selectedModel,
+          format: 'json',
+          requestType: 'consolidation'
+        })
+      })
+  
+      if (!res.ok) throw new Error('Consolidation failed')
+      
+      const { content } = await res.json()
+      const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '');
+      const consolidatedData = JSON.parse(cleanedContent);
+  
+      // Save consolidated data
+      await saveHeavyData(currentSessionId, {
+        fileTree,
+        extractedTexts,
+        summaries,
+        extractedCompanies,
+        rawResponses,
+        consolidatedCompanies: consolidatedData
+      });
+  
+      router.push(`/companies?sessionId=${currentSessionId}`)
+    } catch (error) {
+      console.error('Consolidation error:', error)
+      alert(`Consolidation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setIsConsolidating(false)
+    }
+  }
 
   // ---------------------------
   // On Mount: Check User Auth
@@ -187,6 +243,7 @@ export default function Dashboard() {
       extractedTexts,
       summaries,
       extractedCompanies,
+      rawResponses
     });
 
     setSuccessMessage('Session saved successfully!');
@@ -236,6 +293,9 @@ export default function Dashboard() {
       const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
+
+
+      setRawResponses(heavyData.rawResponses || {});
 
       // 3) Rebuild the fileTree from base64
       const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
@@ -353,6 +413,20 @@ export default function Dashboard() {
             setShowExtracted={setShowExtracted}
             rawResponses={rawResponses}
           />
+        )}
+
+        {fileTree.length > 0 && (
+          <button
+            onClick={handleConsolidateCompanies}
+            disabled={isConsolidating || !currentSessionId}
+            className={`px-4 py-2 rounded ${
+              isConsolidating || !currentSessionId 
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
+          </button>
         )}
 
         {/* Radio Buttons to change "contextType"? */}

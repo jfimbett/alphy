@@ -24,7 +24,6 @@ export async function POST(req: Request) {
   const userId = req.headers.get('x-user-id');
 
   if (DEVELOPMENT) {
-   
     await new Promise(res => setTimeout(res, 500));
     return NextResponse.json({
       content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
@@ -88,12 +87,36 @@ export async function POST(req: Request) {
       }
 
       try {
+        if (requestType === 'consolidation') {
+        console.log('Consolidation Response:', responseText);
+        }
+
         const data = JSON.parse(responseText);
+
+        let content = '';
+
+        if (requestType === 'summarize') {
+          // For summaries, use the message content directly
+          content = data.choices[0].message.content;
+        } else if (requestType === 'consolidation' || requestType === 'extract') {
+           // For structured data, clean JSON formatting
+          const rawContent = data.choices[0].message.content;
+          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+        } else {
+          content = data.choices[0].message.content;
+        }
+
         return NextResponse.json({
-          content: data.choices[0].message.content,
+          content: content,
           tokensUsed: data.usage?.total_tokens || 0
         });
       } catch (parseError) {
+        if (requestType === 'summarize') {
+          return NextResponse.json({
+            content: responseText, // Return raw text if JSON parse fails
+            tokensUsed: 0
+          });
+        }
         console.error('Response JSON Parse Error:', parseError);
         return NextResponse.json(
           { error: 'Failed to parse API response', response: responseText },

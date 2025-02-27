@@ -6,3 +6,15 @@ export type CompanyInfo = {
     ebitda?  : Record<string, number | string>;
     years?: number[];
   };
+
+  export interface VariableData {
+    value?: number | string;
+    currency?: string;
+    unit?: string;
+  }
+  
+  export interface ConsolidatedCompany {
+    name: string;
+    variables: Record<string, VariableData>;
+    dates: string[];
+  }

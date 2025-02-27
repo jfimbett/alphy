@@ -8,6 +8,7 @@ import { FileNode } from '@/components/FileTree';
 // Add to existing imports
 import { CompanyInfo } from '@/app/types';
 import { requestToBodyStream } from 'next/dist/server/body-streams';
+import { ConsolidatedCompany } from '@/app/types';
 
 // IMPORTANT: pdf.js worker config
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
@@ -305,7 +306,9 @@ export function useFileProcessing() {
               newSummaries[fullPath] = 'Summary failed: API error';
             } else {
               const data = await res.json();
-              newSummaries[fullPath] = data.content;
+              let summaryText = data.content;
+              summaryText = summaryText.replace(/```json/gi, '').replace(/```/g, '').trim();
+              newSummaries[fullPath] = summaryText;
             }
           }
         } catch (error) {
@@ -480,6 +483,8 @@ Document Text:\n\n ${text}`;
       extractedTexts: Record<string, string>;
       summaries: Record<string, string>;
       extractedCompanies: Record<string, CompanyInfo[]>;
+      rawResponses: Record<string, string>;
+      consolidatedCompanies?: ConsolidatedCompany[]; 
     }
   ) => {
     try {
@@ -499,9 +504,27 @@ Document Text:\n\n ${text}`;
     }
   };
 
-  return { fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, 
-    isAnalyzing, processingPhase, progress, totalFiles, processedFiles, processZip, 
-    processFolder, analyzeFiles, toggleAllFiles, buildFileTree, saveHeavyData, 
-    extractedCompanies, setExtractedCompanies, rawResponses, setRawResponses
+  return { fileTree, 
+    setFileTree, 
+    extractedTexts, 
+    setExtractedTexts, 
+    summaries, 
+    setSummaries, 
+    isAnalyzing,
+    processingPhase, 
+    progress, 
+    totalFiles, 
+    processedFiles, 
+    processZip, 
+    processFolder, 
+    analyzeFiles, 
+    toggleAllFiles, 
+    buildFileTree, 
+    saveHeavyData, 
+    extractedCompanies, 
+    setExtractedCompanies,
+    rawResponses,
+    setRawResponses,
+    consolidatedCompanies: [] as ConsolidatedCompany[] 
   };
 }

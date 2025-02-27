@@ -129,7 +129,8 @@ useEffect(() => {
         session_data: {
           ...prev.session_data,
           extractedTexts: heavyData.extractedTexts,
-          summaries: heavyData.summaries
+          summaries: heavyData.summaries,
+          rawResponses: heavyData.rawResponses
         }
       } : null);
     } catch (err) {

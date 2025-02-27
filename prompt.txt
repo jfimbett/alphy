@@ -1,19 +1,35 @@
 File: app/dashboard\page.tsx
 ----------------------------------------
 'use client';
+
 import { useRef, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+
+// Components
 import Navbar from '@/components/Navbar';
 import FileTree, { FileNode } from '@/components/FileTree';
-import { ChatMessage } from '@/components/ChatMessage';
-import { SummaryContent } from '@/components/SummaryContent';
-import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
+import SelectedFilePanel from '@/components/dashboard/FilePreviewSection';
+import ChatSection from '@/components/dashboard/ChatSection';
+import ChatContextRadioButtons from '@/components/dashboard/RadioButtons';
+import ModelSelector from '@/components/dashboard/ModelSelector';
+import FileAnalysisButtons from '@/components/dashboard/FileAnalysisProgress';
+import SaveModal from '@/components/dashboard/SaveSessionModal';
+import LoadModal from '@/components/dashboard/LoadSessionModal';
+import FileUploadArea from '@/components/dashboard/FileUploadArea'; // We'll use this now
+
+
+// Hooks
 import { useFileProcessing } from './useFileProcessing';
 import { useChat } from './useChat';
-import { useDropzone } from 'react-dropzone';
+
+// Utility
+import { addBase64ToTree, convertTree } from './utils/fileTreeHelpers';
+
+// Icons (optional usage)
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
+
+// Types
 import { SessionSummary } from '@/app/history/page';
-import { CompanyInfoComponent } from '@/components/CompanyInfoComponent';
 
 type ExistingUpload = {
   upload_id: number;
@@ -21,45 +37,31 @@ type ExistingUpload = {
 };
 
 export default function Dashboard() {
-
-  const [selectedModel, setSelectedModel] = useState('local:deepseek-r1:70b');
-
-
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement | null>(null);
 
+  // ---------------------------
+  // State for File Processing
+  // ---------------------------
   const {
-    fileTree,
-    setFileTree,
-    extractedTexts,
-    setExtractedTexts,
-    summaries,
-    setSummaries,
-    extractedCompanies,
-    isAnalyzing,
-    processingPhase,
-    progress,
-    totalFiles,
-    processedFiles,
-    processZip,
-    processFolder,
-    analyzeFiles,
-    toggleAllFiles,
-    saveHeavyData
+    fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, extractedCompanies, 
+    rawResponses,
+    isAnalyzing, processingPhase, progress, totalFiles, 
+    processedFiles, processZip, processFolder, analyzeFiles, 
+    toggleAllFiles, saveHeavyData,
   } = useFileProcessing();
 
-  const {
-    contextType,
-    setContextType,
-    chatMessage,
-    setChatMessage,
-    chatHistory,
-    setChatHistory,
-    isChatLoading,
-    handleChatSubmit
+  // ---------------------------
+  // State for Chat
+  // ---------------------------
+  const { contextType, setContextType, chatMessage, setChatMessage, chatHistory, setChatHistory, isChatLoading, handleChatSubmit,
   } = useChat();
 
+  // ---------------------------
+  // Local UI States
+  // ---------------------------
+  const [selectedModel, setSelectedModel] = useState('deepseek:deepseek-reasoner');
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [showExtracted, setShowExtracted] = useState(false);
   const [allSelected, setAllSelected] = useState(true);
@@ -67,9 +69,9 @@ export default function Dashboard() {
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
 
-  // ---------------------
-  // SAVE PROGRESS MODAL
-  // ---------------------
+  // ---------------------------
+  // Save Modal States
+  // ---------------------------
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
   const [selectedUploadOption, setSelectedUploadOption] = useState<'new' | 'existing'>('new');
@@ -77,72 +79,25 @@ export default function Dashboard() {
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
 
-
+  // ---------------------------
+  // Load Modal States
+  // ---------------------------
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
 
-  // New load handler
-  const handleLoadClick = async () => {
-    try {
-      const res = await fetch('/api/sessions', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
-      });
-      const data = await res.json();
-      setAvailableSessions(data.sessions);
-      setShowLoadModal(true);
-    } catch {
-      alert('Error loading sessions');
-    }
-  };
+  // Print to console the variables that might be used later
+  console.log(
+    fetchingUploads,
+    existingUploadId,
+    selectedUploadOption,
+    existingUploads,
+    currentSessionId,
+    currentZipName
+  );
 
-  // Updated load confirmation
-  const confirmLoadSession = async (sessionId: string) => {
-    try {
-      const userId = localStorage.getItem('userId');
-      if (!userId) {
-        router.push('/login');
-        return;
-      }
-
-      const response = await fetch('/api/sessions', {
-        headers: { 'x-user-id': userId }
-      });
-      
-      if (!response.ok) throw new Error('Failed to load session');
-      const data = await response.json();
-
-      if (!data.sessions || data.sessions.length === 0) {
-        alert('No session data found.');
-        return;
-      }
-
-      setCurrentSessionId(sessionId);
-
-      // 2) Fetch heavy data
-      const heavyRes = await fetch(
-        `/api/store-heavy-data?sessionId=${sessionId}`
-      );
-      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
-      const heavyData = await heavyRes.json();
-
-      // 3) Rebuild the fileTree from base64
-      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
-      setFileTree(rebuiltTree);
-
-      // 4) Also restore chat history, extracted texts, summaries
-      setChatHistory(heavyData.chatHistory || []);
-      setExtractedTexts(heavyData.extractedTexts || {});
-      setSummaries(heavyData.summaries || {});
-    } catch (error) {
-      console.error('Error loading session:', error);
-      alert('Error loading session: ' + (error as Error).message);
-    }
-  };
-
-  // print to console the variables not used for now
-  console.log(fetchingUploads, existingUploadId, selectedUploadOption, existingUploads, currentSessionId, currentZipName);
-
-  // On mount, check if user is logged in
+  // ---------------------------
+  // On Mount: Check User Auth
+  // ---------------------------
   useEffect(() => {
     const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
     if (!userId) {
@@ -150,9 +105,30 @@ export default function Dashboard() {
     }
   }, [router]);
 
-  // --------------------------------
-  // Open/Close "Save Session" Modal
-  // --------------------------------
+  // ---------------------------
+  // Helper to get all files
+  // ---------------------------
+  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
+    return nodes.flatMap((node) => {
+      if (node.type === 'folder' && node.children) {
+        return getAllFiles(node.children);
+      }
+      return node.type === 'file' ? [node] : [];
+    });
+  };
+
+  // ---------------------------
+  // File Selection
+  // ---------------------------
+  const handleFileSelect = (node: FileNode) => {
+    if (node.type === 'folder') return;
+    if (!node.content) node.content = ''; // Ensure content is always a string
+    setSelectedFile(node);
+  };
+
+  // ---------------------------
+  // "Save Session" Modal
+  // ---------------------------
   const openSaveModal = async () => {
     setNewUploadName('');
     setExistingUploadId(null);
@@ -160,7 +136,7 @@ export default function Dashboard() {
     try {
       setFetchingUploads(true);
       const res = await fetch('/api/uploads', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' }
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
       });
       if (!res.ok) throw new Error('Failed to fetch existing uploads');
       const data = await res.json();
@@ -173,13 +149,11 @@ export default function Dashboard() {
       setShowSaveModal(true);
     }
   };
+
   const closeSaveModal = () => {
     setShowSaveModal(false);
   };
 
-  // --------------------------------
-  // Actually "Save Session"
-  // --------------------------------
   const handleSaveConfirm = async () => {
     try {
       await saveSession();
@@ -193,22 +167,22 @@ export default function Dashboard() {
   async function saveSession(): Promise<string> {
     // 1) Convert rawData -> base64
     const fileTreeWithBase64 = addBase64ToTree(fileTree);
-    console.log('fileTreeWithBase64', fileTreeWithBase64);
-    // 2) Create a minimal session row in DB (or skip if you prefer)
+
+    // 2) Create a minimal session row in DB
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': localStorage.getItem('userId') || ''
+        'x-user-id': localStorage.getItem('userId') || '',
       },
       body: JSON.stringify({
-        sessionName: newUploadName.trim()
-      })
+        sessionName: newUploadName.trim(),
+      }),
     });
     if (!res.ok) throw new Error('Failed to save session');
     const data = await res.json();
     setCurrentSessionId(data.session_id);
-  
+
     // 3) Store heavy data (fileTree, chatHistory, extracted, summaries)
     await saveHeavyData(data.session_id, {
       fileTree: fileTreeWithBase64,
@@ -216,101 +190,77 @@ export default function Dashboard() {
       summaries,
       extractedCompanies,
     });
-  
+
     setSuccessMessage('Session saved successfully!');
     setTimeout(() => setSuccessMessage(''), 5000);
-  
+
     return data.session_id;
   }
 
-
-
-  // Helper to convert base64 -> rawData
-  function convertTree(nodes: FileNode[], sessionId: number | string): FileNode[] {
-    return nodes.map((node) => {
-      if (node.type === 'folder' && node.children) {
-        return { ...node, children: convertTree(node.children, sessionId) };
-      }
-
-
-      // If it's a file, handle base64 => rawData and also localPath => node.content
-      if (node.type === "file") {
-        // 1) If there's base64Data, convert to rawData
-        if (node.base64Data) {
-          const binaryString = atob(node.base64Data);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          node.rawData = bytes.buffer;
-          node.base64Data = undefined; // free it up
-        }
-
-        // 2) If there's a localPath (meaning we wrote this file to disk),
-        // build the route for inline preview
-        if (node.localPath) {
-
-          node.content = `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(node.localPath || '')}`;
-        }
-      }
-      return node;
+  // ---------------------------
+  // "Load Session" Modal
+  // ---------------------------
+  const handleLoadClick = async () => {
+    try {
+      const res = await fetch('/api/sessions', {
+        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
       });
-      }
-
-  // The addBase64ToTree function from your code, ensuring each file node has base64Data
-function addBase64ToTree(nodes: FileNode[]): FileNode[] {
-  return nodes.map((node) => {
-    if (node.type === 'folder' && node.children) {
-      return { ...node, children: addBase64ToTree(node.children) };
+      const data = await res.json();
+      setAvailableSessions(data.sessions);
+      setShowLoadModal(true);
+    } catch {
+      alert('Error loading sessions');
     }
-    if (node.type === 'file' && node.rawData) {
-      const uint8 = new Uint8Array(node.rawData);
-      let binary = '';
-      for (let i = 0; i < uint8.length; i++) {
-        binary += String.fromCharCode(uint8[i]);
-      }
-      const base64Data = btoa(binary);
-      return { ...node, base64Data };
-    }
-    return node;
-  });
-}
-
-  // --------------------------------
-  // FILE SELECTION / HELPERS
-  // --------------------------------
-  const handleFileSelect = (node: FileNode) => {
-    if (node.type === 'folder') return;
-    setSelectedFile(node);
-  };
-  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
-    return nodes.flatMap((node) => {
-      if (node.type === 'folder' && node.children) {
-        return getAllFiles(node.children);
-      }
-      return node.type === 'file' ? [node] : [];
-    });
   };
 
-  // --------------------------------
-  // DROPZONE
-  // --------------------------------
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: async (acceptedFiles) => {
-      const zipFile = acceptedFiles.find((file) => file.name.endsWith('.zip'));
-      if (zipFile) {
-        setCurrentZipName(zipFile.name.replace('.zip', ''));
-        await processZip(zipFile);
+  const confirmLoadSession = async (sessionId: string) => {
+    try {
+      const userId = localStorage.getItem('userId');
+      if (!userId) {
+        router.push('/login');
+        return;
       }
-    },
-    accept: { 'application/zip': ['.zip'] },
-    multiple: false
-  });
 
+      // 1) Confirm the session is available
+      const response = await fetch('/api/sessions', {
+        headers: { 'x-user-id': userId },
+      });
+      if (!response.ok) throw new Error('Failed to load session');
+      const data = await response.json();
+      if (!data.sessions || data.sessions.length === 0) {
+        alert('No session data found.');
+        return;
+      }
+
+      setCurrentSessionId(sessionId);
+
+      // 2) Fetch heavy data
+      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
+      const heavyData = await heavyRes.json();
+
+      // 3) Rebuild the fileTree from base64
+      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
+      setFileTree(rebuiltTree);
+
+      // 4) Restore chat history, extracted texts, summaries
+      setChatHistory(heavyData.chatHistory || []);
+      setExtractedTexts(heavyData.extractedTexts || {});
+      setSummaries(heavyData.summaries || {});
+    } catch (error) {
+      console.error('Error loading session:', error);
+      alert('Error loading session: ' + (error as Error).message);
+    }
+  };
+
+  // ---------------------------
+  // Rendering
+  // ---------------------------
   return (
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
+
         {/* Success Message */}
         {successMessage && (
           <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
@@ -318,137 +268,58 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
           </div>
         )}
 
-        {/* Drag & Drop / Folder Upload */}
+        {/* -----
+             File Upload Area
+             You can remove the inline code if your <FileUploadArea> handles everything.
+         ----- */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div
-            {...getRootProps()}
-            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer ${
-              isDragActive ? 'border-blue-600 bg-blue-50' : 'border-gray-300'
-            }`}
-          >
-            <input {...getInputProps()} />
-            <p className="text-gray-600">
-              {isDragActive ? 'Drop ZIP file here' : 'Drag and drop a ZIP file or click to select'}
-            </p>
-          </div>
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-            <div className="flex gap-2">
-              <input
-                type="file"
-                id="folder-upload"
-                ref={(input) => {
-                  if (input) input.webkitdirectory = true;
-                }}
-                onChange={(e) => {
-                  if (!e.target.files) return;
-                  processFolder(e.target.files);
-                }}
-                className="hidden"
-              />
-              <button
-                onClick={() => document.getElementById('folder-upload')?.click()}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
-              >
-                Upload Folder
-              </button>
-              <button
-                onClick={handleLoadClick}
-                className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
-              >
-                Load Progress
-              </button>
-            </div>
-            <small className="text-gray-500">
-              Your browser may show a brief warning when uploading a folder. This is normal.
-            </small>
-          </div>
+          <FileUploadArea
+            processZip={processZip}
+            processFolder={processFolder}
+            handleLoadClick={handleLoadClick}
+            isDragActive={false}
+          />
         </div>
 
-        {/* Model Selection */}
-        <div className="mb-4 text-gray-800">
-        <label className="block text-sm font-medium mb-1">AI Model</label>
-        <select
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          className="w-full p-2 border rounded bg-white"
-        >
-    
-    <optgroup label="DeepSeek Cloud" style={{ 
-      backgroundImage: `url('https://www.deepseek.com/logo.png')`,
-      backgroundRepeat: 'no-repeat',
-      backgroundPosition: 'left center',
-      paddingLeft: '24px'
-    }}>
-      <option value="deepseek:deepseek-chat">DeepSeek-R1</option>
-    </optgroup>
-  </select>
-</div>
-   
+        {/* Model Selector + Optional Info Icon */}
+        <div className="flex items-center gap-2 mb-4">
+          <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
+          {/* Optionally show an info icon */}
+          <InformationCircleIcon className="h-5 w-5 text-gray-500" title="Select your model" />
+        </div>
 
         {/* If we have a file tree, show Analyze + Save Buttons */}
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={() => analyzeFiles(selectedModel)}
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
-                  disabled={isAnalyzing}
-                >
-                  {isAnalyzing ? 'Analyzing...' : 'Analyze Files'}
-                </button>
-                <button
-                  onClick={openSaveModal}
-                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors"
-                >
-                  Save Progress
-                </button>
-              </div>
-              <div className="flex items-center space-x-4">
-                <button
-                  onClick={() => {
-                    toggleAllFiles(!allSelected);
-                    setAllSelected(!allSelected);
-                  }}
-                  className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
-                >
-                  {allSelected ? 'Deselect All' : 'Select All'}
-                </button>
-                <span className="text-sm text-gray-600">
-                  {getAllFiles(fileTree).filter((f) => f.selected).length} files selected
-                </span>
-              </div>
-              {isAnalyzing && (
-                <div className="flex flex-col items-end space-y-2 ml-4">
-                  <div className="w-64 bg-gray-200 rounded-full h-2.5">
-                    <div
-                      className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                  <span className="text-sm text-gray-600">
-                    {processingPhase === 'extracting' &&
-                      `Converting files to text: ${processedFiles}/${totalFiles} (${progress}%)`}
-                    {processingPhase === 'summarizing' &&
-                      `Summarizing files: ${processedFiles}/${totalFiles} (${progress}%)`}
-                    {processingPhase === 'extracting_companies' &&
-                  `Extracting company data: ${processedFiles}/${totalFiles} (${progress}%)`}
-                  </span>
-                </div>
-              )}
+              <FileAnalysisButtons
+                fileTree={fileTree}
+                selectedModel={selectedModel}
+                analyzeFiles={analyzeFiles}
+                openSaveModal={openSaveModal}
+                toggleAllFiles={toggleAllFiles}
+                allSelected={allSelected}
+                setAllSelected={setAllSelected}
+                getAllFiles={getAllFiles}
+                isAnalyzing={isAnalyzing}
+                progress={progress}
+                processingPhase={processingPhase}
+                processedFiles={processedFiles}
+                totalFiles={totalFiles}
+              />
             </div>
 
             {/* Actual File Tree */}
             <FileTree
               nodes={fileTree}
               onSelect={handleFileSelect}
-              selectedFile={selectedFile}
+              selectedFile={selectedFile ? { ...selectedFile, content: selectedFile.content || '' } : null}
               onToggleConversion={(path) => {
                 const updateNodes = (nodes: FileNode[]): FileNode[] =>
                   nodes.map((n) => ({
                     ...n,
                     selected: n.fullPath === path ? !n.selected : n.selected,
-                    children: n.children ? updateNodes(n.children) : undefined
+                    children: n.children ? updateNodes(n.children) : undefined,
                   }));
                 setFileTree((prev) => updateNodes(prev));
               }}
@@ -465,7 +336,7 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
                   nodes.map((n) => ({
                     ...n,
                     highlighted: newHighlighted.has(n.fullPath!),
-                    children: n.children ? updateNodes(n.children) : undefined
+                    children: n.children ? updateNodes(n.children) : undefined,
                   }));
                 setFileTree(updateNodes(fileTree));
               }}
@@ -473,232 +344,54 @@ function addBase64ToTree(nodes: FileNode[]): FileNode[] {
           </div>
         )}
 
-        {/* Selected File Panel */}
+        {/* Selected File Preview */}
         {selectedFile && (
-          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-            <h3 className="text-lg font-semibold mb-4">{selectedFile.name}</h3>
-            <div className="mb-8">
-              <h4 className="text-sm font-medium text-gray-600 mb-2">File Preview</h4>
-              {selectedFile.name.toLowerCase().endsWith('.pdf') ? (
-                <iframe
-                  src={selectedFile.content}
-                  className="w-full h-96 border rounded-lg"
-                  title="PDF Preview"
-                />
-              ) : selectedFile.name.toLowerCase().match(/\.(xlsx|xls)$/) ? (
-                <p>Excel preview not supported directly in the browser.</p>
-              ) : (
-                <p>Preview not available for this file type</p>
-              )}
-            </div>
-
-            {/* Extracted Text Section */}
-            {extractedTexts[selectedFile.fullPath || ''] && (
-              <div>
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-gray-800 mb-2">Extracted Text</h4>
-                  <button
-                    onClick={() => setShowExtracted((prev) => !prev)}
-                    className="text-sm text-gray-500 hover:text-gray-700"
-                  >
-                    {showExtracted ? 'Hide' : 'Show'} Extracted Text
-                  </button>
-                </div>
-                {showExtracted && (
-                  <div className="border p-3 rounded bg-gray-50 text-sm text-gray-800">
-                    <ExtractedTextContent content={extractedTexts[selectedFile.fullPath || '']} />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Extracted Companies Section */}
-            {extractedCompanies[selectedFile.fullPath || '']?.length > 0 && (
-              <div className="mt-8 border-t pt-6">
-                <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
-                    Companies
-                  </span>
-                  Extracted Entities
-                </h4>
-                <CompanyInfoComponent 
-                  companies={extractedCompanies[selectedFile.fullPath || '']} 
-                />
-              </div>
-            )}
-
-            {/* Summaries Section */}
-            {summaries[selectedFile.fullPath || ''] && (
-              <div className="mt-8 border-t pt-6">
-                <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm mr-2">
-                    AI Summary
-                  </span>
-                  Key Insights
-                </h4>
-                <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-                  <SummaryContent content={summaries[selectedFile.fullPath || '']} />
-                  <div className="mt-4 flex items-center text-sm text-green-700">
-                    <InformationCircleIcon className="w-4 h-4 mr-1" />
-                    Summary generated by AI - verify against original documents
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <SelectedFilePanel
+            selectedFile={{ ...selectedFile, content: selectedFile.content || '' }}
+            extractedTexts={extractedTexts}
+            extractedCompanies={extractedCompanies}
+            summaries={summaries}
+            showExtracted={showExtracted}
+            setShowExtracted={setShowExtracted}
+            rawResponses={rawResponses}
+          />
         )}
 
-        {/* Radio Buttons for Chat Context */}
-        <div className="mb-4 flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
-              <input
-                type="radio"
-                checked={contextType === 'none'}
-                onChange={() => setContextType('none')}
-                className="w-4 h-4"
-              />
-              <span className="flex items-center gap-1">
-                No Context
-                <span className="text-gray-500 text-xs">(Question only)</span>
-              </span>
-            </label>
-            <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
-              <input
-                type="radio"
-                checked={contextType === 'local'}
-                onChange={() => setContextType('local')}
-                className="w-4 h-4"
-              />
-              <span className="flex items-center gap-1">
-                Local Context
-                <span className="text-gray-500 text-xs">(Current file only)</span>
-              </span>
-            </label>
-            <label className="flex items-center gap-1 text-sm font-medium text-gray-700 ml-4">
-              <input
-                type="radio"
-                checked={contextType === 'global'}
-                onChange={() => setContextType('global')}
-                className="w-4 h-4"
-              />
-              <span className="flex items-center gap-1">
-                Global Context
-                <span className="text-gray-500 text-xs">
-                  ({getAllFiles(fileTree).filter((f) => f.selected).length} files selected)
-                </span>
-              </span>
-            </label>
-          </div>
-        </div>
+        {/* Radio Buttons to change "contextType"? */}
+        <ChatContextRadioButtons fileTree={fileTree} getAllFiles={getAllFiles} />
 
         {/* Chat Section */}
-        <div className="mt-8 border-t pt-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
-            <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
-              Ask Me Anything
-            </span>
-            About This File
-          </h3>
-          <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
-            {chatHistory.map((msg, idx) => (
-              <ChatMessage key={idx} role={msg.role} content={msg.content} />
-            ))}
-          </div>
-          <form
-            ref={formRef}
-            onSubmit={(e) =>
-              handleChatSubmit({
-                e,
-                selectedFileText: extractedTexts[selectedFile?.fullPath || ''],
-                globalContext: Array.from(highlightedFiles)
-                  .map((path) => extractedTexts[path])
-                  .join('\n\n'),
-                  model: selectedModel
-              })
-            }
-            className="flex gap-2 text-gray-600"
-          >
-            <textarea
-              value={chatMessage}
-              onChange={(e) => setChatMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  formRef.current?.requestSubmit();
-                }
-              }}
-              className="flex-1 p-2 border rounded-lg"
-              placeholder="Ask a question about this file..."
-              rows={2}
-              disabled={isChatLoading}
-            />
-            <button
-              type="submit"
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
-              disabled={isChatLoading}
-            >
-              {isChatLoading ? 'Sending...' : 'Ask'}
-            </button>
-          </form>
-        </div>
+        <ChatSection
+          chatHistory={chatHistory}
+          formRef={formRef}
+          handleChatSubmit={handleChatSubmit}
+          extractedTexts={extractedTexts}
+          selectedFile={selectedFile}
+          highlightedFiles={highlightedFiles}
+          chatMessage={chatMessage}
+          setChatMessage={setChatMessage}
+          isChatLoading={isChatLoading}
+          selectedModel={selectedModel}
+        />
 
-        {/* SAVE PROGRESS MODAL */}
-        {showSaveModal && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
-            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-800">Save Session</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Session Name:
-                  </label>
-                  <input
-                    type="text"
-                    className="border border-gray-300 rounded w-full p-2 text-gray-800"
-                    value={newUploadName}
-                    onChange={(e) => setNewUploadName(e.target.value)}
-                    placeholder="Enter a session name..."
-                  />
-                </div>
-              </div>
-              <div className="mt-6 flex justify-end space-x-2">
-                <button
-                  onClick={closeSaveModal}
-                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveConfirm}
-                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                >
-                  Save Session
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Save Modal */}
+        <SaveModal
+          showSaveModal={showSaveModal}
+          newUploadName={newUploadName}
+          setNewUploadName={setNewUploadName}
+          closeSaveModal={closeSaveModal}
+          handleSaveConfirm={handleSaveConfirm}
+        />
+
       </main>
 
-      {showLoadModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          <div className="bg-white p-6 rounded-lg max-w-md w-full">
-            <h3 className="text-xl font-bold mb-4 text-gray-800">Select Session</h3>
-            {availableSessions.map(session => (
-              <div key={session.session_id} 
-                  className="p-3 hover:bg-gray-100 cursor-pointer text-gray-600"
-                  onClick={() => confirmLoadSession(session.session_id.toString())}>
-                <p>{session.session_name}</p>
-                <small>{new Date(session.created_at).toLocaleDateString()}</small>
-              </div>
-            ))}
-            <button onClick={() => setShowLoadModal(false)} className="mt-4 text-gray-800">
-              Go Back
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Load Modal (rendered outside main for simplicity) */}
+      <LoadModal
+        showLoadModal={showLoadModal}
+        availableSessions={availableSessions}
+        confirmLoadSession={confirmLoadSession}
+        setShowLoadModal={setShowLoadModal}
+      />
     </div>
   );
 }
@@ -808,6 +501,7 @@ import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { FileNode } from '@/components/FileTree';
 // Add to existing imports
 import { CompanyInfo } from '@/app/types';
+import { requestToBodyStream } from 'next/dist/server/body-streams';
 
 // IMPORTANT: pdf.js worker config
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
@@ -843,10 +537,10 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
-  // Add to the existing state
+
+  
+  const [rawResponses, setRawResponses] = useState<Record<string, string>>({});
   const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
-
-
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
   const [summaries, setSummaries] = useState<Record<string, string>>({});
@@ -1071,9 +765,20 @@ export function useFileProcessing() {
 
       for (const [fullPath, text] of textEntries) {
         try {
-          const prompt = `Summarize the following text in one paragraph,
-focusing on key financial metrics, risks, and opportunities.
-Recall that the text could be written in different languages other than English.\n\n${text}`;
+          const prompt = `You are a Summarization Assistant. Your job is to read the text below—written in any language—and produce a single-paragraph summary in clear, fluent English. Focus on the following:
+
+              Key financial metrics (e.g., revenue, assets, profitability)
+              Risks (e.g., market risks, operational risks)
+              Opportunities (e.g., potential growth, strategic advantages)
+
+          Instructions:
+
+              Write exactly one paragraph.
+              Emphasize the most relevant financial details, along with notable risks and opportunities.
+              Avoid minor or irrelevant information.
+              Output only the summarized text, with no extra commentary, headings, or disclaimers.
+
+          Document Text: ${text}`;
 
           if (DEVELOPMENT) {
             newSummaries[fullPath] = 'Some random text for development purposes...';
@@ -1083,13 +788,14 @@ Recall that the text could be written in different languages other than English.
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 prompt,
-                context: text.substring(0, 2000) || '',
                 history: [],
                 model: model,
+                requestType: 'summarize',
               }),
             });
 
             if (!res.ok) {
+              console.error('Summary API error:', res.statusText);
               newSummaries[fullPath] = 'Summary failed: API error';
             } else {
               const data = await res.json();
@@ -1112,72 +818,133 @@ Recall that the text could be written in different languages other than English.
       setProgress(0);
       setProcessedFiles(0);
 
-      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
-  let companyCount = 0;
+      // We extract first the variables that are present
 
-  for (const [fullPath, text] of textEntries) {
-    try {
-      const extractionPrompt = `Extract company financial data in this EXACT JSON format:
-      {
-        "companies": [{
-          "name": "Company Name",
-          "sector": "Industry Sector",
-          "years": ["2023", "2022"],
-          "profits": {"2023": "1.2M", "2022": "900K"},
-          "assets": {"2023": "5.7M", "2022": "4.9M"}
-        }]
-      }
-      
-      Rules:
-      1. Return only valid JSON
-      2. Use exact values from the text
-      3. Skip missing data
-      4. No additional text or explanations
-      
-      Document Text: ${text.substring(0, 3000)}`;
+      let variables  = '';
 
-      if (DEVELOPMENT) {
-        newExtractedCompanies[fullPath] = [{
-          name: 'Example Corp',
-          sector: 'Technology',
-          profits: { '2022': 1500000, '2023': 2000000 },
-          assets: { '2022': 5000000, '2023': 6000000 },
-          years: [2022, 2023]
-        }];
-      } else {
+      for (const [fullPath, text] of textEntries) {
+        const variables_prompt = `
+        Out of the following text, identify what financial varables are referenced, the text can be written in languages different than english, return me only the list of variables without the values
+
+        ["var1", "var2", ...]
+
+        here is the text, return the name of the variables in english, also be consistent across names and try not to duplicate them, Im looking mostly for accounting variables
+        Also return the names of the variables in lower case and with underscores instead of spaces.
+
+
+        ${text}
+        `
+
         const res = await fetch('/api/llm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: extractionPrompt,
-            model,
-            format: 'json'
+            prompt: variables_prompt,
+            model: model,
+            format: 'json',
+            requestType: 'extract',
           }),
         });
 
+        // append the variables to the variables string
         if (res.ok) {
           const data = await res.json();
-          try {
-            const companies: CompanyInfo[] = JSON.parse(data.content);
-            newExtractedCompanies[fullPath] = companies;
-          } catch (e) {
-            console.error('Failed to parse company data:', e);
-            newExtractedCompanies[fullPath] = [];
-          }
+          const contentWithFence = data.content || '';
+          const cleaned = contentWithFence
+            .replace(/```json\s*/i, '')
+            .replace(/```/g, '')
+            .trim();
+
+          variables += cleaned;
         }
       }
-    } catch (error) {
-      newExtractedCompanies[fullPath] = [];
-    }
-
-    companyCount++;
-    setProcessedFiles(companyCount);
-    setProgress(Math.round((companyCount / textEntries.length) * 100));
-  }
-
-  setExtractedCompanies(newExtractedCompanies);
 
 
+      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
+      let companyCount = 0;
+      
+      for (const [fullPath, text] of textEntries) {
+        try {
+          // Simpler extraction prompt, no repeated quotes
+          const extractionPrompt = `
+      You are an Information Extraction Assistant. 
+      Your task is to read the given text (which may appear in any language) and extract 
+      any company-level financial data into a well-structured JSON array. 
+      There could be many be multiple companies mentioned, so please generate an array entry for each 
+      distinct company. These are the potential fields you may encounter (not necessarily all will be present, nor they will be in english)
+      
+      Variables:
+      ${variables}
+
+
+Rules:
+
+    Output ONLY valid JSON: Do not include markdown, explanations, or any text outside the JSON.
+    Use EXACT values from the text (including any currency symbols) for numeric fields.
+    Skip any fields that are not present in the text (do not output null or empty strings).
+    If multiple statements for different years are found, list all those years in the "years" array and include the corresponding values in their respective objects (e.g., "profits", "assets", etc.).
+    If multiple companies are mentioned in the text, create a separate object for each company.
+    Do not include any additional text or explanation outside of the JSON array.
+
+Example Output (This is just an illustrative example, not tied to any specific document): [ { "name": "Example Corporation Inc.", "org_number": "987654321", "sector": "Retail", "years": ["2021", "2020"], "profits": { "2021": "USD 1,000,000", "2020": "USD 950,000" }, "assets": { "2021": "USD 5,000,000", "2020": "USD 4,500,000" }, "revenue": { "2021": "USD 3,000,000", "2020": "USD 2,700,000" } } ]
+
+Document Text:\n\n ${text}`;
+      
+          if (DEVELOPMENT) {
+            newExtractedCompanies[fullPath] = [{
+              name: 'Example Corp',
+              sector: 'Technology',
+              profits: { '2022': 1500000, '2023': 2000000 },
+              assets: { '2022': 5000000, '2023': 6000000 },
+              years: [2022, 2023]
+            }];
+          } else {
+            const res = await fetch('/api/llm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: extractionPrompt,
+                model: model,
+                format: 'json',
+                requestType: 'extract',
+              }),
+            });
+      
+            if (res.ok) {
+              const data = await res.json();
+              // data.content might have triple backticks, so remove them:
+              const contentWithFence = data.content || '';
+              const cleaned = contentWithFence
+                .replace(/```json\s*/i, '')
+                .replace(/```/g, '')
+                .trim();
+      
+                const rawResponse = data.content;
+                setRawResponses(prev => ({...prev, [fullPath]: rawResponse}));
+
+              try {
+                // Expecting an array
+                const companies: CompanyInfo[] = JSON.parse(cleaned);
+                newExtractedCompanies[fullPath] = companies;
+              } catch (e) {
+                console.error('Failed to parse company data:', e);
+                newExtractedCompanies[fullPath] = [];
+              }
+            } else {
+              newExtractedCompanies[fullPath] = [];
+            }
+          }
+        } catch (error) {
+          newExtractedCompanies[fullPath] = [];
+        }
+      
+        companyCount++;
+        setProcessedFiles(companyCount);
+        setProgress(Math.round((companyCount / textEntries.length) * 100));
+      }
+      
+      setExtractedCompanies(newExtractedCompanies);
+      
       } catch (error) {
         console.error('Processing error:', error);
       } finally {
@@ -1219,35 +986,481 @@ Recall that the text could be written in different languages other than English.
         }),
       });
       if (!res.ok) throw new Error('Failed to save heavy data');
-      console.log('Heavy data saved successfully');
+     
     } catch (error) {
       console.error(error);
       throw error;
     }
   };
 
-  return {
-    fileTree,
-    setFileTree,
-    extractedTexts,
-    setExtractedTexts,
-    summaries,
-    setSummaries,
-    isAnalyzing,
-    processingPhase,
-    progress,
-    totalFiles,
-    processedFiles,
-    processZip,
-    processFolder,
-    analyzeFiles,
-    toggleAllFiles,
-    buildFileTree,
-    saveHeavyData,
-    extractedCompanies,
-    setExtractedCompanies
+  return { fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, 
+    isAnalyzing, processingPhase, progress, totalFiles, processedFiles, processZip, 
+    processFolder, analyzeFiles, toggleAllFiles, buildFileTree, saveHeavyData, 
+    extractedCompanies, setExtractedCompanies, rawResponses, setRawResponses
   };
 }
+
+----------------------------------------
+
+File: app/dashboard\utils\fileTreeHelpers.tsx
+----------------------------------------
+// app\dashboard\utils\fileTreeHelpers.ts
+import { FileNode } from '@/components/FileTree';
+
+export function addBase64ToTree(nodes: FileNode[]): FileNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'folder' && node.children) {
+      return { ...node, children: addBase64ToTree(node.children) };
+    }
+    if (node.type === 'file' && node.rawData) {
+      const uint8 = new Uint8Array(node.rawData);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Data = btoa(binary);
+      return { ...node, base64Data };
+    }
+    return node;
+  });
+}
+
+export function convertTree(nodes: FileNode[], sessionId: number | string): FileNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'folder' && node.children) {
+      return { ...node, children: convertTree(node.children, sessionId) };
+    }
+    if (node.type === 'file') {
+      // Convert base64 => rawData if present
+      if (node.base64Data) {
+        const binaryString = atob(node.base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        node.rawData = bytes.buffer;
+        node.base64Data = undefined; // free it up
+      }
+      // Build the inline content path if localPath is present
+      if (node.localPath) {
+        node.content = `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(
+          node.localPath || ''
+        )}`;
+      }
+    }
+    return node;
+  });
+}
+
+----------------------------------------
+
+File: app/history\page.tsx
+----------------------------------------
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { TrashIcon } from '@heroicons/react/24/outline';
+import Navbar from '@/components/Navbar';
+
+export interface SessionSummary {
+  session_id: number;
+  session_name: string;
+  created_at: string;
+  file_count: number;
+}
+
+export default function HistoryPage() {
+  const router = useRouter();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // Fetch user sessions on mount
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      // Not logged in
+      router.push('/login');
+      return;
+    }
+
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) {
+          setError(data.error);
+          return;
+        }
+        setSessions(data.sessions || []);
+      })
+      .catch((err) => {
+        setError(err.message || 'Error fetching sessions');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [router]);
+
+  // Delete a session
+  async function handleDeleteSession(sessionId: number) {
+    const userId = localStorage.getItem('userId') || '';
+     // First confirmation:
+    if (!confirm('Are you sure you want to delete this session?')) return;
+    // Second confirmation:
+    if (!confirm('This action is permanent and cannot be undone. Continue?')) return;
+
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to delete session');
+      }
+
+      // Remove it from local state
+      setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert('Error deleting session: ' + err.message);
+      } else {
+        alert('Error deleting session');
+      }
+      console.error(err);
+    }
+  }
+
+  if (loading) {
+    return <div className="p-4">Loading sessions...</div>;
+  }
+
+  if (error) {
+    return <div className="p-4 text-red-600">Error: {error}</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800">Your Sessions</h1>
+        {sessions.length === 0 ? (
+          <p>No sessions found.</p>
+        ) : (
+          <ul className="space-y-4">
+            {sessions.map((session) => (
+              <li key={session.session_id} className="border p-4 rounded bg-white flex justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-600">
+                    {session.session_name}
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Created: {new Date(session.created_at).toLocaleString()}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    {/*Files: {session.file_count}*/}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* View Details */}
+                  <button
+                    onClick={() => router.push(`/history/${session.session_id}`)}
+                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    View Details
+                  </button>
+
+                  {/* Trash Icon => Delete Session */}
+                  <button
+                    onClick={() => handleDeleteSession(session.session_id)}
+                    className="p-2 hover:bg-red-50 rounded"
+                    title="Delete Session"
+                  >
+                    <TrashIcon className="w-5 h-5 text-red-600" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </main>
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: app/history\[sessionId]\page.tsx
+----------------------------------------
+// app/history/[sessionId]/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import Footer from '@/components/Footer';
+import ReactJson from 'react-json-view';
+import * as XLSX from 'xlsx';
+import { FileNode } from '@/components/FileTree';
+
+// Define the structure of the session data stored in the database.
+export interface SessionData {
+  session_name: string;
+  fileTree?: FileNode[];
+  // You can add other properties (extractedTexts, summaries, chatHistory, etc.) here
+  [key: string]: unknown;
+}
+
+// Define the session structure returned by your API.
+export interface Session {
+  session_data: SessionData;
+  created_at: string;
+  file_count: number;
+}
+
+// A helper function to recursively extract Excel files from the file tree.
+const getExcelFiles = (nodes: FileNode[]): FileNode[] => {
+  let files: FileNode[] = [];
+  nodes.forEach((node) => {
+    if (node.type === 'file' && /\.(xlsx|xls)$/i.test(node.name)) {
+      files.push(node);
+    }
+    if (node.children && node.children.length > 0) {
+      files = files.concat(getExcelFiles(node.children));
+    }
+  });
+  return files;
+};
+
+// Component to preview an Excel file node.
+const ExcelPreview: React.FC<{ node: FileNode }> = ({ node }) => {
+  const [tableData, setTableData] = useState<string[][]>([]);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    const parseExcel = async () => {
+      if (!node.base64Data) {
+        setError('No data available');
+        return;
+      }
+      try {
+        // Decode the base64 string into a binary string.
+        const binaryStr = atob(node.base64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        // Parse the workbook using XLSX.
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        // Convert the sheet to an array-of-arrays (each row is an array).
+        const data: (string | number | boolean | null)[][] = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, { header: 1 });
+        const stringData: string[][] = data.map(row => row.map(cell => cell !== null ? cell.toString() : ''));
+        setTableData(stringData);
+      } catch {
+        setError('Error parsing Excel file');
+      }
+    };
+
+    parseExcel();
+  }, [node.base64Data]);
+
+  return (
+    <div className="mb-4">
+      <h3 className="font-semibold text-gray-800">{node.name}</h3>
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : tableData.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border border-gray-300">
+            <tbody>
+              {tableData.slice(0, 10).map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-b border-gray-200">
+                  {row.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className="px-2 py-1 border-r border-gray-200 text-gray-800"
+                    >
+                      {cell !== undefined ? cell.toString() : ''}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {tableData.length > 10 && (
+            <p className="text-sm text-gray-600 mt-2">Showing first 10 rows</p>
+          )}
+        </div>
+      ) : (
+        <p className="text-gray-800">No data to preview</p>
+      )}
+    </div>
+  );
+};
+
+const SessionDetail: React.FC = () => {
+  const { sessionId } = useParams();
+  const [session, setSession] = useState<Session | null>(null);
+  const [error, setError] = useState<string>('');
+
+// Add this useEffect to fetch heavy data when the component mounts
+useEffect(() => {
+
+  const userId = localStorage.getItem('userId');
+  if (!userId || !sessionId) return;
+
+  const fetchHeavyData = async () => {
+    try {
+      const res = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      if (!res.ok) throw new Error('Failed to fetch heavy data');
+      const heavyData = await res.json();
+      // Merge heavy data into session data
+      setSession(prev => prev ? {
+        ...prev,
+        session_data: {
+          ...prev.session_data,
+          extractedTexts: heavyData.extractedTexts,
+          summaries: heavyData.summaries
+        }
+      } : null);
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unknown error occurred');
+      }
+    }
+  };
+
+  async function fetchSession() {
+    try {
+      // 1) Minimal session info from the DB
+      const sessRes = await fetch(`/api/sessions/${sessionId}`, {
+        headers: { 'x-user-id': userId || '' },
+      });
+      if (!sessRes.ok) throw new Error('Failed to fetch session');
+      const sessJson = await sessRes.json();
+      // sessJson is { session: { session_id, session_name, created_at, ... } }
+
+      // 2) Heavy data from local file
+      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      // If heavy data doesn’t exist, it might be 404. You can handle that gracefully.
+      if (!heavyRes.ok) {
+        console.warn('No heavy data found (maybe not uploaded yet).');
+      }
+      const heavyJson = heavyRes.ok ? await heavyRes.json() : {};
+
+      // 3) Merge them together
+      // Suppose your DB session JSON doesn't store `session_data` by default.
+      // You can create a structure that includes fileTree, chatHistory, etc.
+      setSession({
+        // For example, you can store them like:
+        session_data: {
+          session_name: sessJson.session.session_name,
+          fileTree: heavyJson.extractedTexts ? [] : [], // or reconstruct if you wish
+          // Or you can do more advanced merges if you have them
+          extractedTexts: heavyJson.extractedTexts || {},
+          summaries: heavyJson.summaries || {},
+        },
+        created_at: sessJson.session.created_at,
+        file_count: sessJson.session.file_count || 0,
+      });
+    } catch (err) {
+      console.error('Error fetching session details:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }
+
+  if (sessionId) {
+    fetchSession();
+    fetchHeavyData();
+  }
+}, [sessionId]);
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <Navbar />
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p className="text-red-600">{error}</p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <Navbar />
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p>Loading session details...</p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Extract Excel files (if any) from the file tree stored in session_data.
+  const excelFiles: FileNode[] = session.session_data.fileTree
+    ? getExcelFiles(session.session_data.fileTree)
+    : [];
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+        <h1 className="text-2xl font-bold mb-6">Session Details</h1>
+        <div className="mb-4">
+          <p>
+            <strong>Name:</strong>{' '}
+            {session.session_data.session_name || 'Untitled Session'}
+          </p>
+          <p>
+            <strong>Created:</strong>{' '}
+            {new Date(session.created_at).toLocaleString()}
+          </p>
+          <p>
+           {/* <strong>Files Count:</strong> {session.file_count}*/}
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-2">Session Data</h2>
+          {/* A scrollable, collapsible JSON viewer */}
+          <div className="max-h-96 overflow-y-auto bg-gray-100 p-4 rounded">
+            <ReactJson
+              src={session.session_data}
+              theme="rjv-default"
+              collapsed={2}
+              displayDataTypes={false}
+              style={{ fontSize: '0.875rem' }}
+            />
+          </div>
+        </div>
+
+        {excelFiles.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-2">Excel Files Preview</h2>
+            {excelFiles.map((file, index) => (
+              <ExcelPreview key={index} node={file} />
+            ))}
+          </div>
+        )}
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+export default SessionDetail;
 
 ----------------------------------------
 
@@ -1657,9 +1870,8 @@ File: app/api\llm\route.tsx
 import { NextResponse } from 'next/server'
 import pool from '@/utils/db';
 
-export const dynamic = 'force-dynamic'; // Required for streaming/async operations
+export const dynamic = 'force-dynamic';
 
-// Add this at the top for better error messages
 interface DeepSeekError {
   error: {
     message: string;
@@ -1670,18 +1882,17 @@ interface DeepSeekError {
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { prompt, context, history, model, format } = body || {};
+  const { prompt, context, history, model, format, requestType } = body || {};
 
   if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: "Invalid prompt" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid prompt" }, { status: 300 });
   }
 
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
   const userId = req.headers.get('x-user-id');
 
-  // === If in dev mode, return a mock response immediately
   if (DEVELOPMENT) {
-    console.log('Using mock LLM responses');
+   
     await new Promise(res => setTimeout(res, 500));
     return NextResponse.json({
       content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
@@ -1690,149 +1901,90 @@ export async function POST(req: Request) {
   }
 
   try {
-    let response: Response | null | undefined = undefined as Response | null | undefined;
-
-// Add model validation and better error logging
-if (model?.startsWith('deepseek:')) {
-  const deepseekKey = process.env.DEEPSEEK_API_KEY;
-  if (!deepseekKey) {
-    console.error('DeepSeek API key missing');
-    return NextResponse.json(
-      { error: 'DeepSeek API key not configured' },
-      { status: 500 }
-    );
-  }
-
-  const modelName = model.replace('deepseek:', '');
-  const messages = [
-    { role: 'system', content: 'You are a helpful assistant.' },
-    ...(Array.isArray(history) ? history : []),
-    { role: 'user', content: prompt }
-  ];
-
-  try {
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${deepseekKey}`
-      },
-      body: JSON.stringify({
-        model: modelName,
-        messages,
-        temperature: 0.1,
-        max_tokens: 4000,
-        stream: false
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('DeepSeek API Error:', {
-        status: response.status,
-        statusText: response.statusText,
-        errorBody: errorText
-      });
-      throw new Error(`DeepSeek API Error: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return NextResponse.json({
-      content: data.choices[0].message.content,
-      tokensUsed: data.usage?.total_tokens || 0
-    });
-  } catch (error) {
-    console.error('DeepSeek API Call Failed:', error);
-    return NextResponse.json(
-      { error: 'Failed to communicate with DeepSeek API' },
-      { status: 500 }
-    );
-  }
-}
-    else if (model?.startsWith('openai:')) {
-      // Query the DB for the user’s key
-      const apiKeyRes = await pool.query(
-        `SELECT provider, decrypted_key 
-         FROM api_keys 
-         WHERE user_id = $1`,
-        [userId]
-      );
-      const keyMap = Object.fromEntries(
-        apiKeyRes.rows.map((row: { provider: string; decrypted_key: string }) => [
-          row.provider,
-          row.decrypted_key
-        ])
-      );
-
-      // If no openai key found for this user, handle that gracefully
-      const openaiKey = keyMap.openai;
-      if (!openaiKey) {
+    
+    if (model?.startsWith('deepseek:')) {
+      const deepseekKey = process.env.DEEPSEEK_API_KEY;
+      if (!deepseekKey) {
+        console.error('DeepSeek API key missing');
         return NextResponse.json(
-          { error: 'No OpenAI API key found for this user' },
-          { status: 400 }
+          { error: 'DeepSeek API key not configured' },
+          { status: 500 }
         );
       }
 
-      response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const modelName = model.replace('deepseek:', '');
+      const messages = [
+        { role: 'system', content: context || 'You are a helpful assistant.' },
+        ...(Array.isArray(history) ? history : []),
+        { role: 'user', content: prompt }
+      ];
+
+      const requestPayload = {
+        model: modelName,
+        messages,
+        temperature: 0.1,
+        max_tokens: 8000,
+        stream: false,
+        //response_format: format === 'json' ? { type: 'json_object' } : undefined
+      };
+
+      const startTime = Date.now();
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiKey}`
+          'Authorization': `Bearer ${deepseekKey}`
         },
-        body: JSON.stringify({
-          model: model.replace('openai:', ''),
-          response_format: body.format === 'json' ? { type: "json_object" } : undefined,
-          messages: [
-            { 
-              role: 'system', 
-              content: body.format === 'json' ? 
-                'Return response as valid JSON array. No markdown or extra text.' : 
-                (context || '')
-            },
-            ...(Array.isArray(history) ? history : []),
-            { role: 'user', content: prompt }
-          ]
-        })
+        body: JSON.stringify(requestPayload)
       });
+
+      const responseTime = Date.now() - startTime;
+      const responseText = await response.text();
+      
+      
 
       if (!response.ok) {
-        const errorData: DeepSeekError = await response.json();
-        throw new Error(`DeepSeek Error: ${errorData.error.message}`);
+        console.error('DeepSeek API Error Details:', {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseText
+        });
+        return NextResponse.json(
+          { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
+          { status: 500 }
+        );
       }
-    
-      const data = await response.json();
-      
-      // Handle different response structure from DeepSeek
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error('No content in DeepSeek response');
+
+      try {
+        const data = JSON.parse(responseText);
+        return NextResponse.json({
+          content: data.choices[0].message.content,
+          tokensUsed: data.usage?.total_tokens || 0
+        });
+      } catch (parseError) {
+        console.error('Response JSON Parse Error:', parseError);
+        return NextResponse.json(
+          { error: 'Failed to parse API response', response: responseText },
+          { status: 500 }
+        );
       }
-    
-      return NextResponse.json({
-        content,
-        tokensUsed: data.usage?.total_tokens || 0
-      });
     }
 
-
-    // If no response from above calls, error
-    if (!response) {
-      throw new Error('No response from LLM fetch');
-    }
-    if (!response.ok) {
-      throw new Error(`LLM API Error: ${response.statusText || 'No response'}`);
+    if (model?.startsWith('openai:')) {
+      // commented for now
     }
 
-    // Parse JSON from the LLM response
-    const data = await response.json();
-    return NextResponse.json({
-      content: data.choices?.[0]?.message?.content || data.message?.content || "",
-      tokensUsed: data.usage?.total_tokens || 0
-    });
+    return NextResponse.json(
+      { error: 'Unsupported model provider' },
+      { status: 400 }
+    );
 
   } catch (error) {
     console.error('LLM Processing Error:', error);
-    return NextResponse.json({ error: "LLM processing failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: 'LLM processing failed', details: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
   }
 }
 ----------------------------------------
@@ -2592,1943 +2744,219 @@ export async function PATCH(request: Request,{ params }: { params: { uploadId: s
 
 ----------------------------------------
 
-File: components\AlphyAnimation.tsx
+File: db\reset.sql
 ----------------------------------------
-'use client';
-
-import { useEffect, useState } from 'react';
-
-export default function AlphyAnimation() {
-  const [letters, setLetters] = useState<string[]>([]);
-
-  useEffect(() => {
-    // Split the word "Alphy" into individual letters
-    const word = 'Alphy'.split('');
-
-    // Animate each letter with a delay
-    word.forEach((letter, index) => {
-      setTimeout(() => {
-        setLetters((prevLetters) => [...prevLetters, letter]);
-      }, index * 150); // Reduced delay for faster animation
-    });
-  }, []);
-
-  return (
-        <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-purple-500">
-          {letters.map((letter, index) => (
-            <span
-              key={index}
-              className="inline-block animate-bounce-in"
-              style={{ animationDelay: `${index * 0.15}s` }}
-            >
-              {letter}
-            </span>
-          ))}
-        </h1>
-  );
-}
-----------------------------------------
-
-File: components\AnalysisPreview.tsx
-----------------------------------------
-// components/AnalysisPreview.tsx
-'use client';
-
-import { motion } from 'framer-motion';
-
-const bars = [
-  { height: 2*40, delay: 0.2 },
-  { height: 2*60, delay: 0.4 },
-  { height: 2*30, delay: 0.6 },
-  { height: 2*80, delay: 0.8 },
-  { height: 2*50, delay: 1.0 },
-];
-
-export default function AnalysisPreview() {
-  return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="relative w-full h-full"
-    >
-      {/* Floating Graph Animation */}
-      <div className="absolute inset-0 flex items-end justify-center gap-2">
-        {bars.map((bar, index) => (
-          <motion.div
-            key={index}
-            initial={{ height: 0 }}
-            animate={{ height: bar.height }}
-            transition={{
-              duration: 1.5,
-              repeat: Infinity,
-              repeatType: 'reverse',
-              delay: bar.delay,
-              ease: "easeInOut",
-            }}
-            className="w-8 bg-blue-400 rounded-t-lg shadow-lg"
-          />
-        ))}
-      </div>
-
-      {/* Floating Data Points */}
-      <motion.div 
-        className="absolute top-4 left-4 flex gap-2"
-        animate={{ y: [-5, 5, -5] }}
-        transition={{ duration: 4, repeat: Infinity }}
-      >
-        <div className="w-2 h-2 bg-green-400 rounded-full" />
-        <div className="w-2 h-2 bg-yellow-400 rounded-full" />
-        <div className="w-2 h-2 bg-red-400 rounded-full" />
-      </motion.div>
-
-    
-    </motion.div>
-  );
-}
-----------------------------------------
-
-File: components\ChatMessage.tsx
-----------------------------------------
-'use client';
-
-import React, { useState } from 'react';
-
-// 1. ReactMarkdown & plugins
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';       // GitHub-Flavored Markdown
-import remarkMath from 'remark-math';     // For math syntax $x^2$
-import rehypeKatex from 'rehype-katex';   // For rendering math
-import 'katex/dist/katex.min.css';        // KaTeX styles
-
-// 2. Optional Syntax Highlighting
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-
-//==========================
-// HELPER: parseAIResponse
-//==========================
-export const parseAIResponse = (content: string) => {
-  const thinkingEndIndex = content.indexOf('</think>');
-  if (thinkingEndIndex === -1) {
-    return { thinking: null, answer: content };
-  }
-
-  const thinkingStartIndex = content.indexOf('<think>');
-  const thinking = content.slice(thinkingStartIndex + 7, thinkingEndIndex);
-  const answer = content.slice(thinkingEndIndex + 8);
-
-  return { thinking, answer };
-};
-
-//==========================
-// MAIN COMPONENT
-//==========================
-interface ChatMessageProps {
-  role: string;
-  content: string;
-}
-
-export const ChatMessage: React.FC<ChatMessageProps> = ({ role, content }) => {
-  const [showThinking, setShowThinking] = useState(false);
-
-  // Extract the answer vs. hidden <think> text
-  const { thinking, answer } = parseAIResponse(content);
-
-  // Decide background colors, text colors, etc.
-  const isUser = role === 'user';
-  const containerClasses = isUser
-    ? 'bg-blue-50 border border-blue-200'
-    : 'bg-purple-50 border border-purple-200';
-
-  // Custom renderer for code blocks in Markdown
-  const markdownComponents = {
-    code({ inline, className, children, ...props }: { inline?: boolean, className?: string, children?: React.ReactNode }) {
-      const match = /language-(\w+)/.exec(className || '') || [];
-      return !inline ? (
-        <SyntaxHighlighter
-          language={match[1] || 'text'}
-          style={oneDark}
-          PreTag="div"
-          {...props}
-        >
-          {String(children).replace(/\n$/, '')}
-        </SyntaxHighlighter>
-      ) : (
-        <code className={className} {...props}>
-          {children}
-        </code>
-      );
-    },
-  };
-
-  return (
-    <div className={`p-4 rounded-lg mb-2 ${containerClasses}`}>
-      <div className="flex items-start gap-2">
-        <span className={`text-sm font-medium ${isUser ? 'text-blue-600' : 'text-purple-600'}`}>
-          {isUser ? 'You:' : 'AI:'}
-        </span>
-
-        <div className="flex-1 text-gray-700">
-          {/* ANSWER as Markdown */}
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={markdownComponents}
-          >
-            {answer}
-          </ReactMarkdown>
-
-          {thinking && (
-            <div className="mt-2">
-              <button
-                onClick={() => setShowThinking(!showThinking)}
-                className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
-              >
-                {showThinking ? 'Hide' : 'Show'} Reasoning
-                <svg
-                  className={`w-4 h-4 transition-transform ${showThinking ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              {showThinking && (
-                <div className="mt-2 p-3 bg-gray-100 rounded-lg text-sm text-gray-600">
-                  {/* THINKING as Markdown (optional) */}
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {thinking}
-                  </ReactMarkdown>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
+DO $$ DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP TABLE IF EXISTS public.' || r.tablename || ' CASCADE';
+    END LOOP;
+END $$;
 
 ----------------------------------------
 
-File: components\CompanyInfoComponent.tsx
+File: db\schema.sql
 ----------------------------------------
-'use client';
-import { CompanyInfo } from '@/app/types';
-import React, { useEffect, useState } from 'react';
+-- db/schema.sql
 
-// Type guard for company data validation
-function isCompanyArray(data: any): data is CompanyInfo[] {
-  return Array.isArray(data) && data.every(item => 
-    typeof item.name === 'string' &&
-    (typeof item.sector === 'string' || item.sector === undefined) &&
-    (typeof item.years === 'undefined' || Array.isArray(item.years)) &&
-    (typeof item.profits === 'undefined' || typeof item.profits === 'object') &&
-    (typeof item.assets === 'undefined' || typeof item.assets === 'object')
-  );
-}
+-- 1) Users table (unchanged)
+CREATE TABLE IF NOT EXISTS users (
+  user_id SERIAL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  full_name VARCHAR(255),
+  company VARCHAR(255),
+  reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-export const CompanyInfoComponent = ({ companies }: { companies: any }) => {
-  const [error, setError] = useState<string | null>(null);
-  const [validatedCompanies, setValidatedCompanies] = useState<CompanyInfo[]>([]);
+-- sessions table (lighter)
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL,
+  session_name VARCHAR(255),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days',
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
 
-  useEffect(() => {
-    if (!companies) {
-      setError('No company data provided');
-      setValidatedCompanies([]);
-      return;
-    }
 
-    if (!isCompanyArray(companies)) {
-      setError('Invalid company data format');
-      setValidatedCompanies([]);
-      return;
-    }
+CREATE TABLE IF NOT EXISTS files (
+  file_id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL,
+  session_id INT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  file_size BIGINT,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+);
 
-    setError(null);
-    setValidatedCompanies(companies);
-  }, [companies]);
 
-  if (error) {
-    return (
-      <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
-        <h3 className="text-red-600 font-medium">Data Error</h3>
-        <p className="text-red-500 text-sm">{error}</p>
-      </div>
-    );
-  }
+-- 4) Extractions table (modified)
+CREATE TABLE IF NOT EXISTS extractions (
+  extraction_id SERIAL PRIMARY KEY,
+  file_id INT NOT NULL,
+  extracted_text TEXT,      -- Store path to text file if large
+  summarized_text TEXT,     -- Store path to summary file if large
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (file_id) REFERENCES files(file_id)
+);
 
-  if (validatedCompanies.length === 0) return null;
+-- 5) Named Entities table (unchanged)
+CREATE TABLE IF NOT EXISTS named_entities (
+  entity_id SERIAL PRIMARY KEY,
+  file_id INT NOT NULL,
+  entity_type VARCHAR(50),
+  entity_name VARCHAR(255),
+  confidence NUMERIC(5, 2),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (file_id) REFERENCES files(file_id)
+);
 
-  return (
-    <div className="mt-8 border-t pt-6">
-      <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-        <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
-          Company Data
-        </span>
-        Extracted Information
-      </h4>
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        {validatedCompanies.map((company, index) => (
-          <div key={index} className="p-4 border-b last:border-b-0">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h3 className="font-medium text-gray-900">{company.name}</h3>
-                {company.sector && <p className="text-sm text-gray-600">{company.sector}</p>}
-              </div>
-              {company.years && company.years.length > 0 && (
-                <div className="col-span-2">
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div className="font-medium">Year</div>
-                    <div className="font-medium">Profits</div>
-                    <div className="font-medium">Assets</div>
-                    {company.years.map((year, yearIndex) => (
-                      <React.Fragment key={yearIndex}>
-                        <div className="text-gray-600">{year}</div>
-                        <div className="text-gray-600">
-                          {company.profits?.[year] || 'N/A'}
-                        </div>
-                        <div className="text-gray-600">
-                          {company.assets?.[year] || 'N/A'}
-                        </div>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
+-- Example: Create an uploads table
+CREATE TABLE IF NOT EXISTS uploads (
+  upload_id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL,                -- references 'users' table
+  upload_name VARCHAR(255) NOT NULL,   -- name of the upload (e.g. "Financial Docs")
+  upload_path TEXT,                    -- optional path or label, if needed
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+-- Create api_keys table
+CREATE TABLE api_keys (
+    id SERIAL PRIMARY KEY,
+    user_id UUID REFERENCES auth.users NOT NULL,
+    provider TEXT NOT NULL,
+    decrypted_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, provider)
+);
 ----------------------------------------
 
-File: components\CompanySearch.tsx
+File: db\sec_financial_data.sql
 ----------------------------------------
-import { useEffect, useState } from 'react';
+-- Create database
+CREATE DATABASE sec_financial_data;
+\c sec_financial_data;
 
-interface Company {
-  cik: string;
-  name: string;
-  tickers: string[];
-}
+-- Create tables
+CREATE TABLE companies (
+    cik VARCHAR(10) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+);
 
-export default function CompanySearch() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+CREATE TABLE tickers (
+    id SERIAL PRIMARY KEY,
+    cik VARCHAR(10) REFERENCES companies(cik),
+    ticker VARCHAR(10) NOT NULL
+);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch both datasets in parallel
-        const [namesRes, tickersRes] = await Promise.all([
-          fetch('https://03ac-194-214-160-21.ngrok-free.app/cik_names?api_token=t3stt%40ken'),
-          fetch('https://03ac-194-214-160-21.ngrok-free.app/cik_tickers?api_token=t3stt%40ken')
-        ]);
+CREATE TABLE financial_data (
+    id SERIAL PRIMARY KEY,
+    cik VARCHAR(10) REFERENCES companies(cik),
+    accn VARCHAR(255) NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    location VARCHAR(50),
+    value NUMERIC(15,2) NOT NULL,
+    frame VARCHAR(20) NOT NULL,
+    taxonomy VARCHAR(20) NOT NULL,
+    units VARCHAR(10) NOT NULL,
+    account_name VARCHAR(255) NOT NULL
+);
 
-        const namesData: Record<string, string> = await namesRes.json();
-        const tickersData: Record<string, string[]> = await tickersRes.json();
+-- Indexes for faster search
+CREATE INDEX idx_companies_name ON companies USING gin(to_tsvector('english', name));
+CREATE INDEX idx_tickers_ticker ON tickers(ticker);
+CREATE INDEX idx_financial_data_cik ON financial_data(cik);
 
-        // Merge the datasets
-        const mergedCompanies = Object.entries(tickersData).map(([cikWithZeros, tickers]) => {
-          // Remove leading zeros from CIK
-          const cik = parseInt(cikWithZeros, 10).toString();
-          return {
-            cik,
-            name: namesData[cik] || 'Unknown Company',
-            tickers
-          };
-        });
-
-        setCompanies(mergedCompanies);
-        setLoading(false);
-      } catch {
-        setError('Failed to load company data');
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, []);
-
-  const filteredCompanies = companies.filter(company => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      company.name.toLowerCase().includes(searchLower) ||
-      company.tickers.some(ticker => ticker.toLowerCase().includes(searchLower)) ||
-      company.cik.includes(searchTerm)
-    );
-  });
-
-  if (loading) return <div className="p-4 text-gray-500">Loading company data...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
-
-  return (
-    <div className="max-w-2xl mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Company Search</h1>
-      
-      <input
-        type="text"
-        placeholder="Search by company name, ticker, or CIK..."
-        className="w-full p-2 border rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-      />
-
-      <div className="space-y-2">
-        {filteredCompanies.slice(0, 10).map(company => (
-          <div
-            key={company.cik}
-            className="p-4 border rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="font-semibold">{company.name}</h3>
-                <p className="text-gray-600 text-sm">CIK: {company.cik}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {company.tickers.map(ticker => (
-                  <span
-                    key={ticker}
-                    className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
-                  >
-                    {ticker}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {filteredCompanies.length === 0 && searchTerm && (
-        <div className="text-gray-500 text-center py-4">
-          No companies found matching `{searchTerm}`
-        </div>
-      )}
-    </div>
-  );
-}
+ALTER TABLE tickers
+ADD CONSTRAINT unique_cik_ticker UNIQUE (cik, ticker);
 ----------------------------------------
 
-File: components\ExtractedTextComponent.tsx
+File: db\testdata.sql
 ----------------------------------------
-'use client';
+-- db/testdata.sql
+-- 
+-- This file inserts random data into the tables: users, uploads, files, extractions, named_entities.
+-- 
+-- Make sure you have already run your schema (db/schema.sql) so these tables exist.
+
+-- 1) Insert some users
+INSERT INTO users (email, password_hash, full_name)
+VALUES 
+  ('john@example.com', 'fakehash123', 'John Doe'),
+  ('jane@example.com', 'fakehashABC', 'Jane Smith'),
+  ('bob@example.com',  'fakehashXYZ', 'Bob Martin');
+
+-- 2) Insert some uploads
+-- Let's assume each user did a couple of uploads
+-- We'll store references to user_id = 1, 2, 3 from above. 
+-- The "upload_path" might be a local or S3 path, just an example string
+INSERT INTO uploads (user_id, upload_name, upload_path)
+VALUES
+  (1, 'Q1 Financials', '/uploads/2023_04_01_Q1_financials.zip'),
+  (1, 'M&A Documents', '/uploads/MnA_Acquisition_Jan.zip'),
+  (2, 'Random Folder', '/uploads/RandomDataFolder.zip'),
+  (3, 'Company Deck', '/uploads/CompanyDeckInfo.zip');
+
+-- 3) Insert some files 
+-- The foreign key "upload_id" must match the "upload_id" from the uploads above.
+-- We'll add random PDF/Excel names to show variety
+INSERT INTO files (upload_id, file_name, file_path, mime_type, is_extracted)
+VALUES
+  -- For the first upload (upload_id=1)
+  (1, 'Fund_ABC_Financials.pdf', '/files/Fund_ABC_Financials.pdf', 'application/pdf', FALSE),
+  (1, 'Q1_Statements.xls',        '/files/Q1_Statements.xls',       'application/vnd.ms-excel', FALSE),
+  (1, 'Company_Overview.pdf',     '/files/Company_Overview.pdf',    'application/pdf', FALSE),
+
+  -- For the second upload (upload_id=2)
+  (2, 'M_and_A_Terms.pdf',        '/files/M_and_A_Terms.pdf',       'application/pdf', FALSE),
+  (2, 'Deal_Appendix.xlsx',       '/files/Deal_Appendix.xlsx',      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', FALSE),
+
+  -- For the third upload (upload_id=3)
+  (3, 'Random_Presentation.pdf',  '/files/Random_Presentation.pdf',  'application/pdf', FALSE),
+
+  -- For the fourth upload (upload_id=4)
+  (4, 'Company_Deck_v2.pdf',      '/files/Company_Deck_v2.pdf',     'application/pdf', FALSE),
+  (4, 'Some_Excel_Data.xlsx',     '/files/Some_Excel_Data.xlsx',    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', FALSE);
+
+-- 4) Insert extractions
+-- We'll pretend we've already extracted text from some files. 
+-- That means "is_extracted" would be TRUE for them if we want to reflect that. 
+-- Let’s do that in the insert for extractions directly:
+
+-- For demonstration, let's insert extracted text for file_id = 1, 2, 3 (the PDFs or XLS from above).
+-- This means you’d have run your pipeline on these files, got the text, and are saving it here.
+-- We'll also set them to is_extracted=TRUE in the files table.
+UPDATE files SET is_extracted = TRUE WHERE file_id IN (1, 2, 3);
+
+INSERT INTO extractions (file_id, extracted_text, summarized_text)
+VALUES
+  (1, 
+   'This is random extracted text from Fund_ABC_Financials.pdf. It mentions Fund ABC and total assets of $120M <think>some hidden reasoning about their capital structure</think>.', 
+   'Fund ABC has $120M in assets.'),
+  (2, 
+   'Extracted text from Q1_Statements.xls, which lists total revenue of $50M. <think>some hidden reasoning about revenue breakdown</think>', 
+   'Revenue stands at $50M.'),
+  (3,
+   'Overview about the company. They are interested in a partial exit. <think>this is hidden reasoning</think>',
+   'Company is exploring a partial exit.');
+
+
+-- 5) Insert named_entities (optional)
+-- Let’s say we recognized 2 entities in file 1 and 1 entity in file 2.
+INSERT INTO named_entities (file_id, entity_type, entity_name, confidence)
+VALUES
+  (1, 'FUND', 'Fund ABC', 0.95),
+  (1, 'METRIC', '$120M', 0.90),
+  (2, 'METRIC', '$50M', 0.88);
 
-import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';       // for GitHub-Flavored Markdown
-import remarkMath from 'remark-math';     // for LaTeX math
-import rehypeKatex from 'rehype-katex';   // to render LaTeX using KaTeX
-import 'katex/dist/katex.min.css';        // KaTeX CSS
-
-// Optional: If you want code syntax highlighting, you could import:
-// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-// import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-
-interface ExtractedTextProps {
-  content: string;
-}
-
-export const ExtractedTextContent: React.FC<ExtractedTextProps> = ({ content }) => {
-  // If you also want custom rendering for code blocks, you can define components like so:
-  /*
-  const markdownComponents = {
-    code({ node, inline, className, children, ...props }) {
-      const match = /language-(\w+)/.exec(className || '') || [];
-      return !inline ? (
-        <SyntaxHighlighter
-          language={match[1] || 'text'}
-          style={oneDark}
-          PreTag="div"
-          {...props}
-        >
-          {String(children).replace(/\n$/, '')}
-        </SyntaxHighlighter>
-      ) : (
-        <code className={className} {...props}>
-          {children}
-        </code>
-      );
-    },
-  };
-  */
-
-  return (
-    <div className="prose max-w-none text-gray-800">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        // components={markdownComponents} // only if you want code highlighting
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-};
-
-----------------------------------------
-
-File: components\FileTree.tsx
-----------------------------------------
-'use client';
-
-import { useState } from 'react';
-import { FolderIcon, FolderOpenIcon, DocumentIcon } from '@heroicons/react/24/outline';
-
-export interface FileNode {
-  name: string;
-  type: 'file' | 'folder';
-  children?: FileNode[];
-  content?: string;
-  rawData?: ArrayBuffer;
-  fullPath?: string;
-  highlighted?: boolean;
-  selected?: boolean;
-  base64Data?: string;
-  mimeType?: string;
-  localPath?: string;
-}
-
-interface FileTreeProps {
-  nodes: FileNode[];
-  selectedFile?: FileNode | null;
-  onSelect: (node: FileNode) => void;
-  onToggleConversion?: (path: string) => void;
-  onToggleHighlight?: (path: string) => void;
-}
-
-interface TreeNodeProps {
-  node: FileNode;
-  onSelect: (node: FileNode) => void;
-  isSelected: boolean;
-  selectedFile?: FileNode | null;
-  onToggleConversion?: (path: string) => void;
-  onToggleHighlight?: (path: string) => void;
-}
-
-export default function FileTree({
-  nodes,
-  onSelect,
-  selectedFile,
-  onToggleConversion,
-  onToggleHighlight,
-}: FileTreeProps) {
-  return (
-    <div className="pl-4">
-      {nodes.map((node, index) => (
-        <TreeNode
-          key={index}
-          node={node}
-          onSelect={onSelect}
-          isSelected={selectedFile?.name === node.name}
-          selectedFile={selectedFile}
-          onToggleConversion={onToggleConversion}
-          onToggleHighlight={onToggleHighlight}
-        />
-      ))}
-    </div>
-  );
-}
-
-function TreeNode({
-  node,
-  onSelect,
-  isSelected,
-  selectedFile,
-  onToggleConversion,
-  onToggleHighlight,
-}: TreeNodeProps) {
-  const [isOpen, setIsOpen] = useState(false);
-
-  const handleClick = () => {
-    if (node.type === 'file') {
-      onSelect(node);
-    } else {
-      setIsOpen(!isOpen);
-    }
-  };
-
-  const handleDoubleClick = () => {
-    // If it's a file and we have a highlight function, call it
-    if (node.type === 'file' && onToggleHighlight) {
-      onToggleHighlight(node.fullPath!);
-    }
-  };
-
-  return (
-    <div className="pl-4">
-      <div className="flex items-center gap-2">
-        {/* Conversion Checkbox: only for files */}
-        {node.type === 'file' && (
-         <input
-         type="checkbox"
-         checked={node.selected ?? true} // Default to true
-         onChange={(e) => {
-           e.stopPropagation();
-           onToggleConversion?.(node.fullPath!);
-         }}
-         className="w-4 h-4 accent-blue-600 cursor-pointer"
-       />
-        )}
-
-        <button
-          onClick={handleClick}
-          onDoubleClick={handleDoubleClick}
-          className={`flex items-center gap-2 py-2 w-full text-left rounded-md px-2 transition-colors ${
-            node.highlighted ? 'ring-2 ring-blue-500 bg-blue-50 shadow-md' : ''
-          } ${
-            isSelected ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50'
-          }
-          ${node.selected ? '' : 'opacity-50 grayscale'}`
-          }
-        >
-          {/*{!node.selected && (
-              <span className="text-xs text-gray-500 ml-2">(Excluded from analysis)</span>
-            )} */}
-
-          {/* Exclude from analysis, if not selected, and if its not a folder */}
-          {!node.selected && node.type === 'file' && (
-            <span className="text-xs text-gray-500 ml-2">Excluded from analysis</span>
-          )}
-
-          {/* File/Folder Icon */} 
-
-          <span className="w-5 h-5 flex-shrink-0">
-            {node.type === 'folder' ? (
-              isOpen ? (
-                <FolderOpenIcon className="w-5 h-5 text-blue-600" />
-              ) : (
-                <FolderIcon className="w-5 h-5 text-blue-600" />
-              )
-            ) : (
-              <DocumentIcon className="w-5 h-5 text-gray-500" />
-            )}
-          </span>
-
-          {/* File/Folder Name */}
-          <span
-            className={`text-sm ${
-              node.type === 'folder' ? 'font-medium text-gray-900' : 'text-gray-700'
-            }`}
-          >
-            {node.name}
-          </span>
-        </button>
-      </div>
-
-      {/* Render child nodes if folder is open */}
-      {isOpen && node.children && (
-        <div className="pl-4 border-l-2 border-gray-200 ml-3">
-          <FileTree
-            nodes={node.children}
-            onSelect={onSelect}
-            selectedFile={selectedFile}
-            onToggleConversion={onToggleConversion}
-            onToggleHighlight={onToggleHighlight}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: components\FileUploader.tsx
-----------------------------------------
-'use client';
-
-import { useCallback } from 'react';
-
-export default function FileUploader({
-  onUpload
-}: {
-  onUpload: (files: File[]) => void;
-}) {
-  const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files || []);
-      if (files.length > 0) {
-        onUpload(files);
-      }
-    },
-    [onUpload]
-  );
-
-  return (
-    <div className="border-2 border-dashed border-gray-300 p-4 rounded-lg">
-      <input
-        type="file"
-        multiple
-        onChange={handleFileChange}
-        className="block w-full text-sm text-gray-500
-          file:mr-4 file:py-2 file:px-4
-          file:rounded-full file:border-0
-          file:text-sm file:font-semibold
-          file:bg-blue-50 file:text-blue-700
-          hover:file:bg-blue-100"
-      />
-      <p className="mt-2 text-sm text-gray-600">
-        Supported formats: PDF, Excel, Word
-      </p>
-    </div>
-  );
-}
-----------------------------------------
-
-File: components\Footer.tsx
-----------------------------------------
-'use client';
-
-import Link from 'next/link';
-import { FaFacebook, FaTwitter, FaInstagram, FaLinkedin } from 'react-icons/fa';
-
-export default function Footer() {
-  return (
-    <footer className="bg-gray-100 text-gray-600">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Main Footer Content */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center space-y-6 md:space-y-0">
-          {/* Company Info */}
-          <div className="flex flex-col space-y-2">
-            <p className="text-sm font-semibold">© 2023 AlphaGen SARSL. All rights reserved.</p>
-            <p className="text-xs">
-              Based in Luxembourg | License #12345
-            </p>
-          </div>
-
-          {/* Navigation Links */}
-          <nav className="flex flex-col space-y-2">
-            <h3 className="text-sm font-semibold mb-2">Quick Links</h3>
-            <Link href="/about" className="text-xs hover:text-gray-900 transition-colors">
-              About Us
-            </Link>
-            <Link href="/services" className="text-xs hover:text-gray-900 transition-colors">
-              Our Services
-            </Link>
-            <Link href="/contact" className="text-xs hover:text-gray-900 transition-colors">
-              Contact Us
-            </Link>
-            <Link href="/privacy-policy" className="text-xs hover:text-gray-900 transition-colors">
-              Privacy Policy
-            </Link>
-          </nav>
-
-          {/* Social Media Links */}
-          <div className="flex flex-col space-y-2">
-            <h3 className="text-sm font-semibold mb-2">Follow Us</h3>
-            <div className="flex space-x-4">
-              <a
-                href="https://facebook.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <FaFacebook size={20} />
-              </a>
-              <a
-                href="https://twitter.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <FaTwitter size={20} />
-              </a>
-              <a
-                href="https://instagram.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <FaInstagram size={20} />
-              </a>
-              <a
-                href="https://linkedin.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <FaLinkedin size={20} />
-              </a>
-            </div>
-          </div>
-        </div>
-
-        {/* Bottom Line */}
-        <div className="border-t border-gray-300 mt-6 pt-4 text-xs text-center">
-          <p>
-            Designed and built with ❤️ by{' '}
-            <a
-              href="https://yourcompany.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-gray-900 transition-colors"
-            >
-              AlphaGen
-            </a>
-          </p>
-        </div>
-      </div>
-    </footer>
-  );
-}
-----------------------------------------
-
-File: components\Navbar.tsx
-----------------------------------------
-// components/Navbar.tsx
-'use client';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
-import AlphyAnimation from '@/components/AlphyAnimation';
-
-export default function Navbar() {
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
-  const router = useRouter();
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const isLogged = localStorage.getItem('loggedIn') === 'true';
-      setLoggedIn(isLogged);
-      if (isLogged) {
-        setUserEmail(localStorage.getItem('userEmail') || '');
-      } else {
-        // Clear stale data if not logged in
-        localStorage.removeItem('userEmail');
-        localStorage.removeItem('userId');
-      }
-    }
-  }, []);
-
-  const handleLogout = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('loggedIn');
-      localStorage.removeItem('userEmail');
-      localStorage.removeItem('userId');
-    }
-    setLoggedIn(false);
-    router.push('/login');
-  };
-
-  return (
-    <nav className="bg-white shadow">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-        <Link href="/">
-          {/* Having some issues when reloading the website */}
-          {/*<AlphyAnimation />*/}
-          <span className="text-gray-900 hover:text-blue-800 transition-colors font-bold text-xl">Alphy</span>
-        </Link>
-        <div className="flex items-center space-x-4">
-          {loggedIn ? (
-            <>
-              <Link href="/dashboard">
-                <span className="text-gray-700 hover:text-blue-600 transition-colors">Dashboard</span>
-              </Link>
-              <Link href="/history">
-                <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
-              </Link>
-              <Link href="/data">
-                <span className="text-gray-700 hover:text-blue-600 transition-colors">Financial Data</span>
-              </Link>
-              {/* Settings icon */}
-              <Link href="/settings" title="Settings">
-                <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />
-              </Link>
-              <div className="flex items-center space-x-2">
-                <UserCircleIcon className="w-8 h-8 text-blue-600" />
-                <span className="text-gray-700">{userEmail}</span>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors"
-              >
-                Log Out
-              </button>
-            </>
-          ) : (
-            <Link href="/login">
-              <button className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors">
-                Log In
-              </button>
-            </Link>
-          )}
-        </div>
-      </div>
-    </nav>
-  );
-}
-
-----------------------------------------
-
-File: components\SummaryContent.tsx
-----------------------------------------
-'use client';
-
-import React, { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';       
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';        // for rendering math
-
-// If you also want syntax highlighting for code blocks:
-// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-// import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-
-const parseAIResponse = (content: string) => {
-  const thinkingEndIndex = content.indexOf('</think>');
-  if (thinkingEndIndex === -1) {
-    return { thinking: null, answer: content.trim() };
-  }
-  const thinkingStartIndex = content.indexOf('<think>');
-  const thinking = content.slice(thinkingStartIndex + 7, thinkingEndIndex).trim();
-  const answer = content.slice(thinkingEndIndex + 8).trim();
-  return { thinking, answer };
-};
-
-interface SummaryContentProps {
-  content: string;
-}
-
-export const SummaryContent: React.FC<SummaryContentProps> = ({ content }) => {
-  const [showThinking, setShowThinking] = useState(false);
-  const { thinking, answer } = parseAIResponse(content);
-
-  // Optionally define custom renderers for code blocks, etc.
-  // const markdownComponents = {
-  //   code({ node, inline, className, children, ...props }) {
-  //     const match = /language-(\w+)/.exec(className || '') || [];
-  //     return !inline ? (
-  //       <SyntaxHighlighter
-  //         language={match[1] || 'text'}
-  //         style={oneDark}
-  //         PreTag="div"
-  //         {...props}
-  //       >
-  //         {String(children).replace(/\n$/, '')}
-  //       </SyntaxHighlighter>
-  //     ) : (
-  //       <code className={className} {...props}>
-  //         {children}
-  //       </code>
-  //     );
-  //   },
-  // };
-
-  return (
-    <div className="prose max-w-none text-gray-700">
-      {/* ANSWER as Markdown */}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        // components={markdownComponents} // if you want code syntax
-      >
-        {answer}
-      </ReactMarkdown>
-
-      {thinking && (
-        <div className="mt-2">
-          <button
-            onClick={() => setShowThinking((prev) => !prev)}
-            className="text-sm text-green-600 hover:text-green-700 flex items-center gap-1"
-          >
-            {showThinking ? 'Hide' : 'Show'} Reasoning
-            <svg
-              className={`w-4 h-4 transition-transform ${showThinking ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {showThinking && (
-            <div className="mt-2 p-3 bg-green-100 rounded-lg text-sm text-green-700 justify-center">
-              {/* THINKING as Markdown */}
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-              >
-                {thinking}
-              </ReactMarkdown>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
-----------------------------------------
-
-File: components\TestimonialsSlider.tsx
-----------------------------------------
-'use client';
-import React from 'react';
-import dynamic from 'next/dynamic';
-
-// Dynamically import react-slick so it only runs client-side
-const Slider = dynamic(() => import('react-slick'), { ssr: false });
-
-// Import the slick CSS in the client component
-import 'slick-carousel/slick/slick.css';
-import 'slick-carousel/slick/slick-theme.css';
-
-// Optional: custom arrow components
-function NextArrow({ onClick }: { onClick?: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="absolute right-4 bottom-4 z-10 bg-black/50 hover:bg-black/70 text-white
-                 p-3 rounded-full focus:outline-none transition"
-      aria-label="Next"
-    >
-      {/* Simple SVG Arrow */}
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        className="h-5 w-5 transform rotate-[-90deg]"
-        viewBox="0 0 20 20"
-        fill="currentColor"
-      >
-        <path fillRule="evenodd" d="M9.293 15.707a1 1 0 010-1.414L12.586 11H3a1 1 0 110-2h9.586L9.293 5.707a1 1 0 111.414-1.414l4.999 4.999a1 1 0 010 1.414l-4.999 4.999a1 1 0 01-1.414 0z" clipRule="evenodd" />
-      </svg>
-    </button>
-  );
-}
-
-function PrevArrow({ onClick }: { onClick?: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="absolute left-4 bottom-4 z-10 bg-black/50 hover:bg-black/70 text-white
-                 p-3 rounded-full focus:outline-none transition"
-      aria-label="Previous"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        className="h-5 w-5 transform rotate-90"
-        viewBox="0 0 20 20"
-        fill="currentColor"
-      >
-        <path fillRule="evenodd" d="M9.293 15.707a1 1 0 010-1.414L12.586 11H3a1 1 0 110-2h9.586L9.293 5.707a1 1 0 111.414-1.414l4.999 4.999a1 1 0 010 1.414l-4.999 4.999a1 1 0 01-1.414 0z" clipRule="evenodd" />
-      </svg>
-    </button>
-  );
-}
-
-export default function TestimonialsSlider() {
-  // Carousel settings
-  const settings = {
-    dots: true,
-    infinite: true,
-    speed: 600,
-    fade: false, // crossfade effect
-    slidesToShow: 1,
-    slidesToScroll: 1,
-    autoplay: true,
-    autoplaySpeed: 5000,
-    pauseOnHover: true,
-    // enable arrow buttons
-    arrows: true,
-    nextArrow: <NextArrow />,
-    prevArrow: <PrevArrow />,
-  };
-
-  // Example data for each testimonial
-  const testimonials = [
-    {
-      name: 'Sarah L.',
-      role: 'Investment Analyst',
-      quote: `This platform has completely transformed how we approach due diligence.
-              The AI insights are unparalleled!`,
-      image: '/images/testimonial-1.jpg', // replace with a real image path
-    },
-    {
-      name: 'James K.',
-      role: 'Portfolio Manager',
-      quote: `We’ve saved countless hours thanks to the automated document processing.
-              Highly recommend it!`,
-      image: '/images/testimonial-2.jpg',
-    },
-    {
-      name: 'Emily T.',
-      role: 'Managing Director',
-      quote: `The support team is amazing, and the platform is intuitive. 
-              It’s been a game-changer for our firm.`,
-      image: '/images/testimonial-3.jpg',
-    },
-  ];
-
-  return (
-    <Slider {...settings} className="relative">
-      {testimonials.map((item, idx) => (
-        <div
-          key={idx}
-          className="flex items-center justify-center min-h-[400px] md:min-h-[500px]
-                     bg-cover bg-center bg-no-repeat
-                     text-white relative"
-          style={{ backgroundImage: `url(${item.image})` }}
-        >
-          {/* Overlay */}
-          <div className="absolute inset-0 bg-black bg-opacity-20" />
-
-          {/* Content */}
-          <div className="relative z-10 max-w-2xl mx-4 p-6 
-                          rounded-lg animate-fadeInUp
-                          bg-black/50 md:bg-transparent 
-                          md:backdrop-blur-sm
-                          text-center md:text-left">
-            <blockquote className="italic text-lg md:text-xl mb-4">
-              &ldquo;{item.quote}&rdquo;
-            </blockquote>
-            <p className="font-semibold text-sm md:text-base">
-              — {item.name}, {item.role}
-            </p>
-          </div>
-        </div>
-
-      ))}
-    </Slider>
-  );
-}
-
-----------------------------------------
-
-File: components\ui\card.tsx
-----------------------------------------
-// components/ui/card.tsx
-"use client"
-
-import * as React from "react"
-
-// If you have a utility for merging class names, e.g. `clsx` or a custom `cn` helper, use it here.
-// Otherwise, here's a quick fallback:
-function cn(...classes: (string | undefined)[]) {
-  return classes.filter(Boolean).join(" ")
-}
-
-interface CardProps extends React.HTMLAttributes<HTMLDivElement> {}
-
-// A generic Card container.
-export const Card = React.forwardRef<HTMLDivElement, CardProps>(
-  ({ className, children, ...props }, ref) => {
-    return (
-      <div
-        ref={ref}
-        className={cn(
-          "rounded-lg border bg-white text-black shadow-sm", 
-          className
-        )}
-        {...props}
-      >
-        {children}
-      </div>
-    )
-  }
-)
-Card.displayName = "Card"
-
-interface CardHeaderProps extends React.HTMLAttributes<HTMLDivElement> {}
-
-export function CardHeader({ className, ...props }: CardHeaderProps) {
-  return (
-    <div
-      className={cn("border-b p-4", className)}
-      {...props}
-    />
-  )
-}
-
-interface CardTitleProps extends React.HTMLAttributes<HTMLHeadingElement> {}
-
-export function CardTitle({ className, ...props }: CardTitleProps) {
-  return (
-    <h3
-      className={cn("font-semibold leading-none tracking-tight", className)}
-      {...props}
-    />
-  )
-}
-
-interface CardContentProps extends React.HTMLAttributes<HTMLDivElement> {}
-
-export function CardContent({ className, ...props }: CardContentProps) {
-  return (
-    <div
-      className={cn("p-4", className)}
-      {...props}
-    />
-  )
-}
-
-----------------------------------------
-
-File: components\ui\command.tsx
-----------------------------------------
-"use client"
-
-import * as React from "react"
-import { Command as CommandPrimitive } from "cmdk"
-import clsx from "clsx"
-
-interface CommandProps extends React.ComponentPropsWithoutRef<typeof CommandPrimitive> {
-  className?: string
-}
-
-/**
- * Main Command root container with some basic styling:
- * - White background
- * - Border
- * - Rounded corners
- * - Shadow
- */
-const Root = React.forwardRef<HTMLDivElement, CommandProps>(
-  ({ className, ...props }, ref) => (
-    <CommandPrimitive
-      ref={ref}
-      className={clsx(
-        "relative w-full max-w-md rounded border bg-white shadow-sm", 
-        "focus-within:shadow-md transition-shadow",
-        className
-      )}
-      {...props}
-    />
-  )
-)
-Root.displayName = "Command"
-
-/**
- * Command Input
- * - Simple text input with a bottom border
- * - Padding, text styles
- */
-const Input = React.forwardRef<
-  HTMLInputElement,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Input
-    ref={ref}
-    className={clsx(
-      "w-full border-b p-2 outline-none text-sm placeholder:text-gray-400",
-      "focus:outline-none",
-      className
-    )}
-    {...props}
-  />
-))
-Input.displayName = "CommandInput"
-
-/**
- * Command List
- * - The container for your command items.
- */
-const List = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.List
-    ref={ref}
-    className={clsx("max-h-60 overflow-auto", className)}
-    {...props}
-  />
-))
-List.displayName = "CommandList"
-
-/**
- * Command Empty
- * - Displayed when there are no matching items
- */
-const Empty = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Empty
-    ref={ref}
-    className={clsx(
-      "p-4 text-sm text-gray-500 text-center",
-      className
-    )}
-    {...props}
-  />
-))
-Empty.displayName = "CommandEmpty"
-
-/**
- * Command Group
- * - Groups command items under a heading
- */
-const Group = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Group
-    ref={ref}
-    className={clsx("p-2", className)}
-    {...props}
-  />
-))
-Group.displayName = "CommandGroup"
-
-/**
- * Command Item
- * - Each clickable row in the command list
- */
-const Item = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
->(({ className, children, ...props }, ref) => (
-  <CommandPrimitive.Item
-    ref={ref}
-    className={clsx(
-      "flex w-full cursor-pointer select-none items-center rounded p-2 text-sm",
-      "text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition-colors",
-      className
-    )}
-    {...props}
-  >
-    {children}
-  </CommandPrimitive.Item>
-))
-Item.displayName = "CommandItem"
-
-/**
- * Export them in the same named format your code expects:
- */
-export {
-  Root as Command,
-  Input as CommandInput,
-  List as CommandList,
-  Empty as CommandEmpty,
-  Group as CommandGroup,
-  Item as CommandItem,
-}
-
-----------------------------------------
-
-File: components\ui\company-facts-page.tsx
-----------------------------------------
-// components/ui/company-facts-page.tsx
-"use client";
-
-import React, { useState } from "react";
-import dynamic from "next/dynamic";
-import { Skeleton } from "@/components/ui/skeleton";
-
-const Chart = dynamic(() => import("react-apexcharts"), { ssr: false });
-
-// Adjust these if you have environment variables:
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN || "t3stt%40ken";
-
-interface CompanyFacts {
-  cik: number;
-  entityName: string;
-  facts: Record<string, Record<string, { units: Record<string, Array<{ end: string; val: number }>> }>>;
-}
-
-interface CompanyFactsPageProps {
-  cik: string; // "0000320193" or similar
-}
-
-interface GeneralInfo {
-  cik: string;
-  ein: string;
-  addresses: {
-    business: {
-      city: string;
-      stateOrCountry: string;
-      street1: string;
-      street2: string | null;
-      zipCode: string;
-    };
-    mailing: {
-      city: string;
-      stateOrCountry: string;
-      street1: string;
-      street2: string | null;
-      zipCode: string;
-    };
-  };
-  category: string;
-  entityType: string;
-  exchanges: string[];
-  // There's also a huge "filings" object, but we skip it for brevity.
-}
-
-
-export function CompanyFactsPage({ cik }: CompanyFactsPageProps) {
-
-  const [companyFacts, setCompanyFacts] = useState<CompanyFacts | null>(null);
-  const [generalInfo, setGeneralInfo] = useState<GeneralInfo | null>(null);
-
-  const [loading, setLoading] = useState(false);
-  console.log("loading", loading);
-  const [loadingFacts] = useState(false);
-  // console log the setLoadingFacts
-  const [loadingInfo, setLoadingInfo] = useState(false);
-  const [selectedFactPath, setSelectedFactPath] = useState("");
-  const [timeSeriesData, setTimeSeriesData] = useState<Array<{ x: string; y: number }>>([]);
-
-  // Convert "0000320193" -> 320193
-  const numericCik = parseInt(cik, 10);
-
-  async function handleRetrieveFacts() {
-    setLoading(true);
-    setCompanyFacts(null);
-    setTimeSeriesData([]);
-    setSelectedFactPath("");
-
-    try {
-      //const url = `${BASE_URL}/company_facts?cik=${numericCik}&api_token=${API_TOKEN}`;
-      const url = `/api/company-facts?cik=${numericCik}&api_token=${API_TOKEN}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Error fetching facts: ${res.statusText}`);
-      }
-      const data = await res.json();
-      setCompanyFacts(data);
-    } catch (error) {
-      console.error("Failed to retrieve facts:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-
-    // Flatten available fact keys from the returned JSON
-    function getAvailableFactKeys(): string[] {
-      if (!companyFacts?.facts) return [];
-      const keys: string[] = [];
-      for (const [domain, factGroup] of Object.entries(companyFacts.facts)) {
-        for (const factName of Object.keys(factGroup)) {
-          keys.push(`${domain}/${factName}`);
-        }
-      }
-      return keys.sort();
-    }
-
-    function handleSelectFact(path: string) {
-      setSelectedFactPath(path);
-      if (!companyFacts?.facts) return;
-  
-      // Split "dei/EntityCommonStockSharesOutstanding"
-      const [domain, factName] = path.split("/");
-      const factObj = companyFacts.facts[domain]?.[factName];
-      if (!factObj?.units) {
-        setTimeSeriesData([]);
-        return;
-      }
-  
-      // pick the first unit key or "shares"
-      const unitKeys = Object.keys(factObj.units);
-      if (unitKeys.length === 0) {
-        setTimeSeriesData([]);
-        return;
-      }
-      const firstUnitKey = unitKeys[0];
-      const dataPoints = factObj.units[firstUnitKey] as Array<{
-        end: string;
-        val: number;
-      }>;
-  
-      const chartData = dataPoints.map((dp) => ({
-        x: dp.end,
-        y: dp.val,
-      }));
-      // sort by date
-      chartData.sort((a, b) => (a.x < b.x ? -1 : 1));
-      setTimeSeriesData(chartData);
-    }
-
-
-    // -----------------------------------------
-  // FETCH #2: General Info (submission_history)
-  // -----------------------------------------
-  async function handleRetrieveGeneralInfo() {
-    setLoadingInfo(true);
-    setGeneralInfo(null);
-
-    try {
-      const url = `/api/submission-history?cik=${numericCik}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Error fetching general info: ${res.statusText}`);
-      }
-      const data = await res.json();
-      setGeneralInfo(data);
-    } catch (error) {
-      console.error(error);
-      alert("Error retrieving general info. Check console for details.");
-    } finally {
-      setLoadingInfo(false);
-    }
-  }
-
-  
-
-  return (
-    <div className="p-4 bg-white rounded shadow space-y-6 text-gray-800">
-      <h2 className="text-lg font-bold">
-        CIK (raw): {cik} &mdash; (numeric: {numericCik})
-      </h2>
-
-      {/* Buttons */}
-      <div className="flex gap-4">
-        {/* Retrieve All Company Facts */}
-        {!companyFacts && !loadingFacts && (
-          <button
-            onClick={handleRetrieveFacts}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          >
-            Retrieve all Company Facts
-          </button>
-        )}
-        {loadingFacts && <Skeleton className="h-4 w-[200px]" />}
-
-        {/* Retrieve General Info */}
-        {!generalInfo && !loadingInfo && (
-          <button
-            onClick={handleRetrieveGeneralInfo}
-            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-          >
-            Retrieve General Info
-          </button>
-        )}
-        {loadingInfo && <Skeleton className="h-4 w-[200px]" />}
-      </div>
-
-      {/* General Info Display */}
-      {generalInfo && (
-        <div className="border p-4 rounded">
-          <h3 className="font-semibold mb-2">General Info</h3>
-          <p>
-            <strong>CIK:</strong> {generalInfo.cik}
-          </p>
-          <p>
-            <strong>EIN:</strong> {generalInfo.ein}
-          </p>
-          <p>
-            <strong>Category:</strong> {generalInfo.category}
-          </p>
-          <p>
-            <strong>Entity Type:</strong> {generalInfo.entityType}
-          </p>
-          <p>
-            <strong>Exchanges:</strong> {generalInfo.exchanges.join(", ")}
-          </p>
-          <div className="mt-2">
-            <strong>Business Address:</strong>
-            <p>
-              {generalInfo.addresses.business.street1}{" "}
-              {generalInfo.addresses.business.street2} <br />
-              {generalInfo.addresses.business.city},{" "}
-              {generalInfo.addresses.business.stateOrCountry},{" "}
-              {generalInfo.addresses.business.zipCode}
-            </p>
-          </div>
-          <div className="mt-2">
-            <strong>Mailing Address:</strong>
-            <p>
-              {generalInfo.addresses.mailing.street1}{" "}
-              {generalInfo.addresses.mailing.street2} <br />
-              {generalInfo.addresses.mailing.city},{" "}
-              {generalInfo.addresses.mailing.stateOrCountry},{" "}
-              {generalInfo.addresses.mailing.zipCode}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Company Facts + Chart */}
-      {companyFacts && (
-        <div className="border p-4 rounded space-y-4">
-          <p className="text-gray-600">
-            <strong>Entity Name:</strong> {companyFacts.entityName}
-          </p>
-
-          {/* Fact selector */}
-          <div>
-            <label className="block mb-1 mt-4 font-medium text-sm">
-              Select a Fact to Plot:
-            </label>
-            <select
-              className="border rounded px-2 py-1 text-sm"
-              value={selectedFactPath}
-              onChange={(e) => handleSelectFact(e.target.value)}
-            >
-              <option value="">-- Choose --</option>
-              {getAvailableFactKeys().map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Chart for the chosen fact */}
-          {selectedFactPath && timeSeriesData.length > 0 && (
-            <div className="mt-4">
-              <h4 className="font-semibold mb-2 text-gray-700">
-                Chart for: {selectedFactPath}
-              </h4>
-              <Chart
-                type="line"
-                height={300}
-                series={[
-                  {
-                    name: selectedFactPath,
-                    data: timeSeriesData,
-                  },
-                ]}
-                options={{
-                  chart: {
-                    id: "factsChart",
-                    toolbar: { show: false },
-                  },
-                  xaxis: {
-                    type: "datetime",
-                  },
-                }}
-              />
-            </div>
-          )}
-
-          {selectedFactPath && timeSeriesData.length === 0 && (
-            <p className="text-red-500 mt-2">
-              No time-series data found for this fact.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: components\ui\input.tsx
-----------------------------------------
-export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
-    return (
-      <input
-        className={`border border-gray-300 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${className}`}
-        {...props}
-      />
-    );
-  }
-----------------------------------------
-
-File: components\ui\search-form.tsx
-----------------------------------------
-"use client";
-
-import React, { useState } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
-
-interface SearchFormProps {
-  // You can adapt the shape as needed in your handleSearch logic
-  onSearch: (params: {
-    name: string;
-    ticker: string;
-    cik: string;
-  }) => Promise<void>;
-}
-
-export function SearchForm({ onSearch }: SearchFormProps) {
-  const [name, setName] = useState("");
-  const [ticker, setTicker] = useState("");
-  const [cik, setCik] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    console.log("Form submitted"); // <-- Debug log
-    setLoading(true);
-    try {
-      await onSearch({ name, ticker, cik });
-    } catch (error) {
-      console.error("Search error:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="space-y-4 bg-white p-4 rounded shadow-sm"
-    >
-      {/* Name Field */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          Name
-        </label>
-        <input
-          type="text"
-          placeholder="e.g. Apple Inc"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="mt-1 block w-full border-gray-300 rounded-md
-                     shadow-sm focus:border-blue-500 focus:ring-blue-500
-                     text-sm px-3 py-2 text-gray-900"
-        />
-      </div>
-
-      {/* Ticker Field */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          Ticker
-        </label>
-        <input
-          type="text"
-          placeholder="e.g. AAPL"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-          className="mt-1 block w-full border-gray-300 rounded-md
-                     shadow-sm focus:border-blue-500 focus:ring-blue-500
-                     text-sm px-3 py-2 text-gray-900"
-        />
-      </div>
-
-      {/* CIK Field */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          CIK
-        </label>
-        <input
-          type="text"
-          placeholder="e.g. 0000320193"
-          value={cik}
-          onChange={(e) => setCik(e.target.value)}
-          className="mt-1 block w-full border-gray-300 rounded-md
-                     shadow-sm focus:border-blue-500 focus:ring-blue-500
-                     text-sm px-3 py-2"
-        />
-      </div>
-
-      {/* Search Button */}
-      <div className="text-right">
-        <button
-          type="submit"
-          className="inline-flex items-center px-4 py-2
-                     bg-blue-600 text-white rounded
-                     hover:bg-blue-700 text-sm font-medium
-                     focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          Search
-        </button>
-      </div>
-
-      {/* Loading Indicator */}
-      {loading && (
-        <div className="pt-2">
-          <Skeleton className="h-4 w-full" />
-        </div>
-      )}
-    </form>
-  );
-}
-
-----------------------------------------
-
-File: components\ui\search-input.tsx
-----------------------------------------
-// components/ui/search-input.tsx
-"use client";
-
-import { useState, useCallback, useEffect } from 'react';
-import React from 'react';
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command';
-import { debounce } from 'lodash';
-import { Skeleton } from '@/components/ui/skeleton';
-interface SearchInputProps {
-  onSearch: (company: { cik: string; searchTerm: string; name: string; tickers?: string[] }) => void;
-}
-
-export function SearchInput({ onSearch }: SearchInputProps) {
-  const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<{ cik: string; searchTerm: string; name: string; tickers?: string[] }[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const fetchSuggestions = useCallback(async (searchQuery: string) => {
-    try {
-      const response = await fetch(`/api/search?query=${encodeURIComponent(searchQuery)}`);
-      const data = await response.json();
-      setSuggestions(data);
-    } catch (error) {
-      console.error('Error fetching suggestions:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const debouncedFetchSuggestions = useCallback((searchQuery: string) => {
-    debounce(() => fetchSuggestions(searchQuery), 300)();
-  }, [fetchSuggestions]);
-
-  useEffect(() => {
-    if (query.length > 0) {
-      debouncedFetchSuggestions(query);
-      setLoading(true);
-      fetchSuggestions(query);
-    } else {
-      setSuggestions([]);
-    }
-  }, [query, fetchSuggestions, debouncedFetchSuggestions]);
-
-  return (
-    <div className="w-full max-w-2xl mx-auto text-gray-600">
-      <Command shouldFilter={false}>
-        <CommandInput
-          placeholder="Search company by name, CIK, or ticker..."
-          value={query}
-          onValueChange={setQuery}
-        />
-        {loading && <div className="p-2"><Skeleton className="h-4 w-full" /></div>}
-        <CommandList>
-          {suggestions.length > 0 && (
-            <CommandGroup heading="Suggestions">
-              {suggestions.map((company) => (
-                <CommandItem
-                  key={company.cik}
-                  value={company.cik}
-                  onSelect={() => {
-                    setQuery(company.searchTerm);
-                    onSearch(company);
-                    setSuggestions([]);
-                  }}
-                  className="cursor-pointer"
-                >
-                  <div className="flex flex-col">
-                    <span className="font-medium">{company.name}</span>
-                    <div className="flex gap-2 text-sm text-muted-foreground">
-                      {company.tickers?.map(t => <span key={t}>Ticker: {t}</span>)}
-                      <span>CIK: {company.cik.padStart(10, '0')}</span>
-                    </div>
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-          {!loading && suggestions.length === 0 && query.length > 1 && (
-            <CommandEmpty>No results found.</CommandEmpty>
-          )}
-        </CommandList>
-      </Command>
-    </div>
-  );
-}
-----------------------------------------
-
-File: components\ui\search-results.tsx
-----------------------------------------
-// components/ui/search-results.tsx
-"use client";
-import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-
-interface Company {
-  cik: string;
-  name: string;
-  tickers?: string[];
-}
-
-interface SearchResultsProps {
-  results: Company[];
-}
-
-export function SearchResults({ results }: SearchResultsProps) {
-  const router = useRouter();
-  return (
-    <div className="grid gap-4 mt-8">
-      {results.map((company) => (
-        <Card key={company.cik} className="hover:shadow-lg transition-shadow">
-          <CardHeader>
-            <CardTitle className="text-xl">{company.name}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-4 text-muted-foreground">
-              <div>
-                <p className="text-sm">CIK: {company.cik.padStart(10, '0')}</p>
-                {(company.tickers?.length ?? 0) > 0 && (
-                  <p className="text-sm">Tickers: {company.tickers?.join(', ')}</p>
-                )}
-                  <button
-              onClick={() => router.push(`/data/${company.cik}`)}
-              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-            >
-              View Facts
-            </button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-----------------------------------------
-
-File: components\ui\skeleton.tsx
-----------------------------------------
-// components/ui/skeleton.tsx
-
-import * as React from "react"
-import { cn } from "../../lib/utils" // or wherever your cn (classNames) helper is
-
-export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "animate-pulse rounded-md bg-gray-200", 
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-----------------------------------------
-
-File: components\ui\spinner.tsx
-----------------------------------------
-export function Spinner({ className }: { className?: string }) {
-    return (
-      <svg
-        className={`animate-spin h-5 w-5 text-current ${className}`}
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-      >
-        <circle
-          className="opacity-25"
-          cx="12"
-          cy="12"
-          r="10"
-          stroke="currentColor"
-          strokeWidth="4"
-        ></circle>
-        <path
-          className="opacity-75"
-          fill="currentColor"
-          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-        ></path>
-      </svg>
-    );
-  }
 ----------------------------------------
 

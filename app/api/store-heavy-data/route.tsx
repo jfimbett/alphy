@@ -58,14 +58,23 @@ export async function POST(request: Request) {
     }
 
     // 5) Overwrite heavyData.fileTree with the updated one
+    const filePath = path.join(dataDir, 'heavyData.json');
+    const existingData = fs.existsSync(filePath) 
+                ? JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+                : {};
+
     const finalHeavyData = {
+      ...existingData,
       ...heavyData,
       fileTree: updatedFileTree
     };
 
-    // 6) Write everything to heavyData.json
-    const filePath = path.join(dataDir, 'heavyData.json');
+    
     fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
+
+
+
+
 
     return NextResponse.json({ success: true, filePath });
   } catch (error) {
