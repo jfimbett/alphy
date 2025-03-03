@@ -2,6 +2,12 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+import { 
+  defaultSummarizationTemplate,
+  defaultExtractionTemplate,
+  defaultConsolidationTemplate,
+  defaultVariableExtraction
+} from '@/lib/prompts';
 
 export default function SettingsPage() {
   const [user, setUser] = useState<any>(null);
@@ -11,9 +17,15 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('');
   const router = useRouter();
 
+
+const [summarizationTemplate, setSummarizationTemplate] = useState(defaultSummarizationTemplate);
+const [extractionTemplate, setExtractionTemplate] = useState(defaultExtractionTemplate);
+const [consolidationTemplate, setConsolidationTemplate] = useState(defaultConsolidationTemplate);
+const [variableExtraction, setVariableExtraction] = useState(defaultVariableExtraction);
+
+
   useEffect(() => {
     const fetchUser = async () => {
-      // Retrieve user info from localStorage
       const userId = localStorage.getItem('userId');
       const email = localStorage.getItem('userEmail');
       if (!userId || !email) {
@@ -21,6 +33,17 @@ export default function SettingsPage() {
         return;
       }
       setUser({ id: userId, email });
+
+      // Load saved templates
+      const savedSummarization = localStorage.getItem('summarizationTemplate');
+      const savedExtraction = localStorage.getItem('extractionTemplate');
+      const savedConsolidation = localStorage.getItem('consolidationTemplate');
+      const savedVariableExtraction = localStorage.getItem('variableExtraction');
+            
+      if (savedSummarization) setSummarizationTemplate(savedSummarization);
+      if (savedExtraction) setExtractionTemplate(savedExtraction);
+      if (savedConsolidation) setConsolidationTemplate(savedConsolidation);
+      if (savedVariableExtraction) setVariableExtraction(savedVariableExtraction);
       
       // Fetch API keys from your local endpoint
       try {
@@ -48,6 +71,20 @@ export default function SettingsPage() {
     };
     fetchUser();
   }, [router]);
+
+  const saveTemplates = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      localStorage.setItem('summarizationTemplate', summarizationTemplate);
+      localStorage.setItem('extractionTemplate', extractionTemplate);
+      localStorage.setItem('consolidationTemplate', consolidationTemplate);
+      localStorage.setItem('variableExtraction', variableExtraction);
+      setMessage('Templates saved successfully');
+    } catch (err) {
+      setMessage('Error saving templates');
+      console.error(err);
+    }
+  };
 
   const updateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,6 +219,56 @@ export default function SettingsPage() {
           ))}
           <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
             Save API Keys
+          </button>
+        </form>
+
+          {/* LLM Prompt Templates Section */}
+        <form onSubmit={saveTemplates} className="bg-white p-6 rounded-lg shadow mt-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">LLM Prompt Templates</h2>
+          <p className="mb-2 text-gray-600">Customize the prompt templates used at each step.</p>
+          
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Summarization Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={6}
+            value={summarizationTemplate}
+            onChange={(e) => setSummarizationTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Extraction Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={8}
+            value={extractionTemplate}
+            onChange={(e) => setExtractionTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Consolidation Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={10}
+            value={consolidationTemplate}
+            onChange={(e) => setConsolidationTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Variable Extraction Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={6}
+            value={variableExtraction}
+            onChange={(e) => setVariableExtraction(e.target.value)}
+          />
+
+          <button type="submit" className="mt-4 bg-blue-600 text-white px-4 py-2 rounded">
+            Save Templates
           </button>
         </form>
 

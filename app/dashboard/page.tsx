@@ -46,7 +46,8 @@ export default function Dashboard() {
     rawResponses, setRawResponses,
     isAnalyzing, processingPhase, progress, totalFiles, 
     processedFiles, processZip, processFolder, analyzeFiles, 
-    toggleAllFiles, saveHeavyData, consolidatedCompanies
+    toggleAllFiles, saveHeavyData, getConsolidationPrompt,
+    consolidatedCompanies
   } = useFileProcessing();
 
   // ---------------------------
@@ -54,10 +55,6 @@ export default function Dashboard() {
   // ---------------------------
   const { contextType, setContextType, chatMessage, setChatMessage, chatHistory, setChatHistory, isChatLoading, handleChatSubmit,
   } = useChat();
-
-  // ---------------------------
-  // Local UI States
-  // ---------------------------
   const [selectedModel, setSelectedModel] = useState('deepseek:deepseek-reasoner');
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
@@ -66,25 +63,21 @@ export default function Dashboard() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
-
-  // ---------------------------
-  // Save Modal States
-  // ---------------------------
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
   const [selectedUploadOption, setSelectedUploadOption] = useState<'new' | 'existing'>('new');
   const [newUploadName, setNewUploadName] = useState('');
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
-
-  // ---------------------------
-  // Load Modal States
-  // ---------------------------
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
-
-  // consolidating information
   const [isConsolidating, setIsConsolidating] = useState(false);
+
+  // New state for LLM consolidation debug info
+  const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<{ prompt: string; response: string } | null>(null);
+
+  // New state to toggle showing the debug panel
+  const [showDebug, setShowDebug] = useState(false);
 
   const handleConsolidateCompanies = async () => {
     if (!currentSessionId) {
@@ -94,23 +87,11 @@ export default function Dashboard() {
   
     setIsConsolidating(true)
     try {
-      // Prepare consolidation prompt
-      const consolidationPrompt = `Consolidate all company information from these documents into a structured JSON format. Follow these rules:
-      1. Group information by company name
-      2. Standardize variable names (snake_case, English)
-      3. Split currency and values (e.g., "NOK 28.0m" → {value: 28.0, currency: "NOK", unit: "m"})
-      4. Maintain all dates associated with each company
-      5. Remove duplicates
+      // Use helper from useFileProcessing for consolidation prompt
+      const consolidationPrompt = getConsolidationPrompt(rawResponses);
+      // Store consolidation prompt for debugging
+      let consolidationDebug: { prompt: string; response: string } = { prompt: consolidationPrompt, response: '' };
       
-      Output format: [{
-        "name": "Company Name",
-        "variables": {
-          "variable_name": { "value": number, "currency": string, "unit": string }
-        },
-        "dates": string[]
-      }]
-      
-      Raw data: ${JSON.stringify(rawResponses)}`
   
       // Call LLM API
       const res = await fetch('/api/llm', {
@@ -126,9 +107,12 @@ export default function Dashboard() {
   
       if (!res.ok) throw new Error('Consolidation failed')
       
-      const { content } = await res.json()
-      const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '');
-      const consolidatedData = JSON.parse(cleanedContent);
+        const { content } = await res.json();
+        const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '');
+        consolidationDebug.response = cleanedContent;
+        setLlmConsolidationDebug(consolidationDebug);
+
+        const consolidatedData = JSON.parse(cleanedContent);
   
       // Save consolidated data
       await saveHeavyData(currentSessionId, {
@@ -428,7 +412,34 @@ export default function Dashboard() {
             {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
           </button>
         )}
+        {/* New: Toggle Button for Debug Info */}
+        <button
+          onClick={() => setShowDebug(!showDebug)}
+          className="mb-4 bg-gray-200 text-gray-800 px-3 py-1 rounded"
+        >
+          {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
+        </button>
 
+        {showDebug && (
+          <div className="bg-white p-4 rounded shadow mb-6 max-h-80 overflow-y-auto text-gray-600">
+            <h3 className="text-lg font-semibold mb-2">Extraction Debug Info</h3>
+            {Object.entries(rawResponses).map(([filePath, debug]) => (
+              <div key={filePath} className="mb-4 border-b pb-2">
+                <p className="font-medium text-gray-700">File: {filePath}</p>
+                <p className="text-sm text-gray-600"><span className="font-semibold">Prompt:</span> {debug.prompt}</p>
+                <p className="text-sm text-gray-600"><span className="font-semibold">Response:</span> {debug.response}</p>
+              </div>
+            ))}
+            {llmConsolidationDebug && (
+              <div className="mt-4 border-t pt-2">
+                <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
+                <p className="text-sm text-gray-600"><span className="font-semibold">Prompt:</span> {llmConsolidationDebug.prompt}</p>
+                <p className="text-sm text-gray-600"><span className="font-semibold">Response:</span> {llmConsolidationDebug.response}</p>
+              </div>
+            )}
+          </div>
+        )}
+        
         {/* Radio Buttons to change "contextType"? */}
         <ChatContextRadioButtons fileTree={fileTree} getAllFiles={getAllFiles} />
 

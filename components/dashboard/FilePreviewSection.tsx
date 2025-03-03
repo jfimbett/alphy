@@ -18,7 +18,7 @@ interface SelectedFilePanelProps {
   summaries: Record<string, string>;
   showExtracted: boolean;
   setShowExtracted: Dispatch<SetStateAction<boolean>>;
-  rawResponses: Record<string, string>;
+  rawResponses: Record<string, { prompt: string; response: string }>;
 }
 
 const SelectedFilePanel = ({
@@ -72,7 +72,7 @@ const SelectedFilePanel = ({
         <div className="mt-4 p-4 bg-gray-50 rounded-md border border-gray-200">
           <h4 className="text-sm font-medium mb-2 text-gray-700">Raw LLM Response</h4>
           <pre className="text-xs whitespace-pre-wrap break-words text-gray-600">
-            {rawResponses[fullPath] || 'No raw response available'}
+            {rawResponses[fullPath]?.response || 'No raw response available'}
           </pre>
         </div>
       )}

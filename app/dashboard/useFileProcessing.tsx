@@ -5,19 +5,22 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import * as XLSX from 'xlsx';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { FileNode } from '@/components/FileTree';
-// Add to existing imports
 import { CompanyInfo } from '@/app/types';
-import { requestToBodyStream } from 'next/dist/server/body-streams';
 import { ConsolidatedCompany } from '@/app/types';
+import { 
+  defaultSummarizationTemplate,
+  defaultExtractionTemplate,
+  defaultConsolidationTemplate,
+  defaultVariableExtraction
+} from '@/lib/prompts';
 
-// IMPORTANT: pdf.js worker config
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
 const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
 interface FilePayload {
   path: string;
-  base64Data: string; // We'll store file data as base64 from the start
+  base64Data: string;
   blobUrl: string;
 }
 
@@ -44,20 +47,26 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
-
   
-  const [rawResponses, setRawResponses] = useState<Record<string, string>>({});
+  const [rawResponses, setRawResponses] = useState<Record<string, { prompt: string; response: string }>>({});
   const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [extractedTexts, setExtractedTexts] = useState<Record<string, string>>({});
   const [summaries, setSummaries] = useState<Record<string, string>>({});
 
-  // For progress indicators
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [processingPhase, setProcessingPhase] = useState<'extracting' | 'summarizing' | 'idle' | 'extracting_companies'>('idle');
   const [progress, setProgress] = useState(0);
   const [totalFiles, setTotalFiles] = useState(0);
   const [processedFiles, setProcessedFiles] = useState(0);
+
+  const getConsolidationPrompt = (rawData: Record<string, any>) => {
+    const template = typeof window !== 'undefined' 
+      ? localStorage.getItem('consolidationTemplate') || defaultConsolidationTemplate 
+      : defaultConsolidationTemplate;
+    return template.replace('{rawData}', JSON.stringify(rawData));
+  };
+ 
 
   // ======================
   // Build File Tree
@@ -83,11 +92,8 @@ export function useFileProcessing() {
             name: part,
             type: isFile ? 'file' : 'folder',
             children: isFile ? undefined : [],
-            // Store base64 in node.base64Data
             base64Data: isFile ? base64Data : undefined,
-            // content for preview
             content: isFile ? blobUrl : undefined,
-            // We no longer store rawData to avoid detachment
             fullPath: pathSegments.join('/'),
           };
           if (!current.children) current.children = [];
@@ -183,8 +189,6 @@ export function useFileProcessing() {
   const analyzeFiles = async (model: string) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
-
-      // Phase 1: Extract text
       setProcessingPhase('extracting');
       setIsAnalyzing(true);
       setProgress(0);
@@ -199,13 +203,10 @@ export function useFileProcessing() {
       for (const node of allFiles) {
         let extracted = '';
 
-        // If for some reason it's missing base64Data, skip
         if (!node.base64Data) continue;
 
-        // Decode to ArrayBuffer for PDF or XLSX
         const arrayBuffer = base64ToArrayBuffer(node.base64Data);
 
-        // PDF Extraction
         if (node.name.toLowerCase().endsWith('.pdf')) {
           try {
             const data = new Uint8Array(arrayBuffer);
@@ -224,9 +225,7 @@ export function useFileProcessing() {
             console.error(`Failed to extract text from ${node.name}`, err);
             extracted = '[Error extracting PDF text]';
           }
-        }
-        // Excel Extraction
-        else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
+        }else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
           try {
             const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
             let excelText = '';
@@ -244,23 +243,16 @@ export function useFileProcessing() {
             extracted = '[Error extracting Excel text]';
           }
         }
-        // Other file types
         else {
           extracted = '[Text extraction not available for this file type]';
         }
 
         newExtractedTexts[node.fullPath!] = extracted.trim().replace(/\s+/g, ' ');
-
         processedCount++;
         setProcessedFiles(processedCount);
         setProgress(Math.round((processedCount / total) * 100));
       }
-
-     
-
-
       setExtractedTexts(newExtractedTexts);
-
       // Phase 2: Summarization
       setProcessingPhase('summarizing');
       setProgress(0);
@@ -272,22 +264,12 @@ export function useFileProcessing() {
 
       for (const [fullPath, text] of textEntries) {
         try {
-          const prompt = `You are a Summarization Assistant. Your job is to read the text below—written in any language—and produce a single-paragraph summary in clear, fluent English. Focus on the following:
+          const template = typeof window !== 'undefined' 
+          ? localStorage.getItem('summarizationTemplate') || defaultSummarizationTemplate 
+          : defaultSummarizationTemplate;
+        const prompt = template.replace('{documentText}', text);
 
-              Key financial metrics (e.g., revenue, assets, profitability)
-              Risks (e.g., market risks, operational risks)
-              Opportunities (e.g., potential growth, strategic advantages)
-
-          Instructions:
-
-              Write exactly one paragraph.
-              Emphasize the most relevant financial details, along with notable risks and opportunities.
-              Avoid minor or irrelevant information.
-              Output only the summarized text, with no extra commentary, headings, or disclaimers.
-
-          Document Text: ${text}`;
-
-          if (DEVELOPMENT) {
+          if (process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development') {
             newSummaries[fullPath] = 'Some random text for development purposes...';
           } else {
             const res = await fetch('/api/llm', {
@@ -332,17 +314,10 @@ export function useFileProcessing() {
       let variables  = '';
 
       for (const [fullPath, text] of textEntries) {
-        const variables_prompt = `
-        Out of the following text, identify what financial varables are referenced, the text can be written in languages different than english, return me only the list of variables without the values
-
-        ["var1", "var2", ...]
-
-        here is the text, return the name of the variables in english, also be consistent across names and try not to duplicate them, Im looking mostly for accounting variables
-        Also return the names of the variables in lower case and with underscores instead of spaces.
-
-
-        ${text}
-        `
+        const template = typeof window !== 'undefined'
+          ? localStorage.getItem('variableExtraction') || defaultVariableExtraction
+          : defaultVariableExtraction;
+        const variables_prompt = template.replace('{text}', text);
 
         const res = await fetch('/api/llm', {
           method: 'POST',
@@ -355,49 +330,27 @@ export function useFileProcessing() {
           }),
         });
 
-        // append the variables to the variables string
         if (res.ok) {
           const data = await res.json();
-          const contentWithFence = data.content || '';
-          const cleaned = contentWithFence
+          const cleaned = data.content
             .replace(/```json\s*/i, '')
             .replace(/```/g, '')
             .trim();
-
           variables += cleaned;
         }
       }
-
 
       const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
       let companyCount = 0;
       
       for (const [fullPath, text] of textEntries) {
         try {
-          // Simpler extraction prompt, no repeated quotes
-          const extractionPrompt = `
-      You are an Information Extraction Assistant. 
-      Your task is to read the given text (which may appear in any language) and extract 
-      any company-level financial data into a well-structured JSON array. 
-      There could be many be multiple companies mentioned, so please generate an array entry for each 
-      distinct company. These are the potential fields you may encounter (not necessarily all will be present, nor they will be in english)
-      
-      Variables:
-      ${variables}
-
-
-Rules:
-
-    Output ONLY valid JSON: Do not include markdown, explanations, or any text outside the JSON.
-    Use EXACT values from the text (including any currency symbols) for numeric fields.
-    Skip any fields that are not present in the text (do not output null or empty strings).
-    If multiple statements for different years are found, list all those years in the "years" array and include the corresponding values in their respective objects (e.g., "profits", "assets", etc.).
-    If multiple companies are mentioned in the text, create a separate object for each company.
-    Do not include any additional text or explanation outside of the JSON array.
-
-Example Output (This is just an illustrative example, not tied to any specific document): [ { "name": "Example Corporation Inc.", "org_number": "987654321", "sector": "Retail", "years": ["2021", "2020"], "profits": { "2021": "USD 1,000,000", "2020": "USD 950,000" }, "assets": { "2021": "USD 5,000,000", "2020": "USD 4,500,000" }, "revenue": { "2021": "USD 3,000,000", "2020": "USD 2,700,000" } } ]
-
-Document Text:\n\n ${text}`;
+          const template = typeof window !== 'undefined' 
+          ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate 
+          : defaultExtractionTemplate;
+        const extractionPrompt = template
+          .replace('{variables}', variables)
+          .replace('{documentText}', text);
       
           if (DEVELOPMENT) {
             newExtractedCompanies[fullPath] = [{
@@ -421,15 +374,15 @@ Document Text:\n\n ${text}`;
       
             if (res.ok) {
               const data = await res.json();
-              // data.content might have triple backticks, so remove them:
-              const contentWithFence = data.content || '';
-              const cleaned = contentWithFence
+              const rawResponse = data.content;
+              // Store both the prompt and the raw response for debugging
+              setRawResponses(prev => ({ ...prev, [fullPath]: { prompt: extractionPrompt, response: rawResponse } }));
+      
+              const cleaned = rawResponse
                 .replace(/```json\s*/i, '')
                 .replace(/```/g, '')
                 .trim();
       
-                const rawResponse = data.content;
-                setRawResponses(prev => ({...prev, [fullPath]: rawResponse}));
 
               try {
                 // Expecting an array
@@ -483,7 +436,7 @@ Document Text:\n\n ${text}`;
       extractedTexts: Record<string, string>;
       summaries: Record<string, string>;
       extractedCompanies: Record<string, CompanyInfo[]>;
-      rawResponses: Record<string, string>;
+      rawResponses: Record<string, { prompt: string; response: string }>;
       consolidatedCompanies?: ConsolidatedCompany[]; 
     }
   ) => {
@@ -504,7 +457,7 @@ Document Text:\n\n ${text}`;
     }
   };
 
-  return { fileTree, 
+  return {     fileTree, 
     setFileTree, 
     extractedTexts, 
     setExtractedTexts, 
@@ -519,12 +472,12 @@ Document Text:\n\n ${text}`;
     processFolder, 
     analyzeFiles, 
     toggleAllFiles, 
-    buildFileTree, 
+    getConsolidationPrompt,  // exposed for use in dashboard
     saveHeavyData, 
     extractedCompanies, 
     setExtractedCompanies,
     rawResponses,
     setRawResponses,
-    consolidatedCompanies: [] as ConsolidatedCompany[] 
+    consolidatedCompanies: [] as ConsolidatedCompany[]
   };
 }
