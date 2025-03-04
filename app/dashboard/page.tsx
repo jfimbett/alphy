@@ -15,7 +15,6 @@ import SaveModal from '@/components/dashboard/SaveSessionModal';
 import LoadModal from '@/components/dashboard/LoadSessionModal';
 import FileUploadArea from '@/components/dashboard/FileUploadArea'; // We'll use this now
 
-
 // Hooks
 import { useFileProcessing } from './useFileProcessing';
 import { useChat } from './useChat';
@@ -28,6 +27,65 @@ import { InformationCircleIcon } from '@heroicons/react/24/outline';
 
 // Types
 import { SessionSummary } from '@/app/history/page';
+
+// ---------------------------------------------------
+// Helper Functions (NEWLY ADDED)
+// ---------------------------------------------------
+
+// Token estimation with optional GPT-3 encoder
+const estimateTokens = (text: string): number => {
+  // Simple heuristic (1 token ≈ 4 characters)
+  const heuristicEstimate = Math.ceil(text.length / 4);
+
+  // For better accuracy, you could use a tokenizer library like `gpt-3-encoder`:
+  // const { encode } = require('gpt-3-encoder');
+  // return encode(text).length;
+
+  return heuristicEstimate;
+};
+
+// Enhanced merge function with conflict resolution
+const mergeConsolidatedCompanies = (companiesArray: any[]) => {
+  const companyMap = new Map<string, any>();
+
+  companiesArray.forEach((company) => {
+    const existing = companyMap.get(company.name);
+
+    if (!existing) {
+      companyMap.set(company.name, {
+        ...company,
+        variables: deepClone(company.variables),
+        dates: [...company.dates],
+      });
+      return;
+    }
+
+    // Merge variables with priority to newer data
+    existing.variables = deepMerge(existing.variables, company.variables);
+
+    // Deduplicate and sort dates
+    existing.dates = Array.from(new Set([...existing.dates, ...company.dates])).sort(
+      (a, b) => new Date(a).getTime() - new Date(b).getTime()
+    );
+  });
+
+  return Array.from(companyMap.values());
+};
+
+// Deep clone helper
+const deepClone = (obj: any) => JSON.parse(JSON.stringify(obj));
+
+// Deep merge helper
+const deepMerge = (target: any, source: any) => {
+  Object.keys(source).forEach((key) => {
+    if (source[key] instanceof Object && key in target) {
+      Object.assign(source[key], deepMerge(target[key], source[key]));
+    }
+  });
+  return Object.assign(target, source);
+};
+
+// ---------------------------------------------------
 
 type ExistingUpload = {
   upload_id: number;
@@ -42,19 +100,43 @@ export default function Dashboard() {
   // State for File Processing
   // ---------------------------
   const {
-    fileTree, setFileTree, extractedTexts, setExtractedTexts, summaries, setSummaries, extractedCompanies, 
-    rawResponses, setRawResponses,
-    isAnalyzing, processingPhase, progress, totalFiles, 
-    processedFiles, processZip, processFolder, analyzeFiles, 
-    toggleAllFiles, saveHeavyData, getConsolidationPrompt,
-    consolidatedCompanies
+    fileTree,
+    setFileTree,
+    extractedTexts,
+    setExtractedTexts,
+    summaries,
+    setSummaries,
+    extractedCompanies,
+    rawResponses,
+    setRawResponses,
+    isAnalyzing,
+    processingPhase,
+    progress,
+    totalFiles,
+    processedFiles,
+    processZip,
+    processFolder,
+    analyzeFiles,
+    toggleAllFiles,
+    saveHeavyData,
+    getConsolidationPrompt,
+    consolidatedCompanies,
   } = useFileProcessing();
 
   // ---------------------------
   // State for Chat
   // ---------------------------
-  const { contextType, setContextType, chatMessage, setChatMessage, chatHistory, setChatHistory, isChatLoading, handleChatSubmit,
+  const {
+    contextType,
+    setContextType,
+    chatMessage,
+    setChatMessage,
+    chatHistory,
+    setChatHistory,
+    isChatLoading,
+    handleChatSubmit,
   } = useChat();
+
   const [selectedModel, setSelectedModel] = useState('deepseek:deepseek-reasoner');
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
@@ -74,64 +156,131 @@ export default function Dashboard() {
   const [isConsolidating, setIsConsolidating] = useState(false);
 
   // New state for LLM consolidation debug info
-  const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<{ prompt: string; response: string } | null>(null);
+  const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<
+    { prompt: string; response: string }[]
+  >([]);
 
   // New state to toggle showing the debug panel
   const [showDebug, setShowDebug] = useState(false);
 
+  // ---------------------------------------------------
+  // Consolidate Companies (UPDATED)
+  // ---------------------------------------------------
   const handleConsolidateCompanies = async () => {
     if (!currentSessionId) {
-      alert('Please save the session first')
-      return
+      alert('Please save the session first');
+      return;
     }
-  
-    setIsConsolidating(true)
-    try {
-      // Use helper from useFileProcessing for consolidation prompt
-      const consolidationPrompt = getConsolidationPrompt(rawResponses);
-      // Store consolidation prompt for debugging
-      let consolidationDebug: { prompt: string; response: string } = { prompt: consolidationPrompt, response: '' };
-      
-  
-      // Call LLM API
-      const res = await fetch('/api/llm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: consolidationPrompt,
-          model: selectedModel,
-          format: 'json',
-          requestType: 'consolidation'
-        })
-      })
-  
-      if (!res.ok) throw new Error('Consolidation failed')
-      
-        const { content } = await res.json();
-        const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '');
-        consolidationDebug.response = cleanedContent;
-        setLlmConsolidationDebug(consolidationDebug);
 
-        const consolidatedData = JSON.parse(cleanedContent);
-  
-      // Save consolidated data
+    setIsConsolidating(true);
+    try {
+      // 1. Calculate token capacity
+      const MAX_TOKENS = 65536;
+      const SAFETY_MARGIN = 1000;
+      const systemMessage = 'You are a helpful assistant.'; // Use actual context if available
+      const basePrompt = getConsolidationPrompt([]); // Get template without data
+
+      // Estimate base tokens (system message + empty prompt)
+      const baseTokens = estimateTokens(systemMessage) + estimateTokens(basePrompt);
+      const availableTokens = MAX_TOKENS - baseTokens - SAFETY_MARGIN;
+
+      if (availableTokens <= 0) {
+        throw new Error('Base prompt exceeds token limit');
+      }
+
+      // 2. Calculate chunk sizes dynamically
+      const chunks: any[][] = [];
+      let currentChunk: any[] = [];
+      let currentTokens = 0;
+
+      for (const [key, entry] of Object.entries(rawResponses)) {
+        const entryText = JSON.stringify(entry);
+        // Add 2 tokens for JSON formatting overhead
+        const entryTokens = estimateTokens(entryText) + 2; 
+
+        // Check if entry is too big to process alone
+        if (entryTokens > availableTokens) {
+          throw new Error(
+            `Entry too large (${entryTokens} tokens). Max allowed: ${availableTokens}`
+          );
+        }
+
+        if (currentTokens + entryTokens > availableTokens) {
+          chunks.push(currentChunk);
+          currentChunk = [];
+          currentTokens = 0;
+        }
+
+        currentChunk.push(entry);
+        currentTokens += entryTokens;
+      }
+
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk);
+      }
+
+      // 3. Process chunks in parallel with error handling
+      const consolidationDebug: Array<{ prompt: string; response: string }> = [];
+
+      const chunkPromises = chunks.map(async (chunk) => {
+        const chunkPrompt = getConsolidationPrompt(chunk);
+        try {
+          const res = await fetch('/api/llm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: chunkPrompt,
+              model: selectedModel,
+              format: 'json',
+              requestType: 'consolidation',
+            }),
+          });
+
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const { content } = await res.json();
+          const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+          consolidationDebug.push({ prompt: chunkPrompt, response: cleanedContent });
+
+          return JSON.parse(cleanedContent);
+        } catch (error) {
+          console.error('Chunk processing failed:', error);
+          throw error;
+        }
+      });
+
+      // 4. Process all chunks and merge results
+      const chunkResults = await Promise.all(chunkPromises);
+      const mergedData = mergeConsolidatedCompanies(chunkResults.flat());
+
+      // 5. Final validation and save
+      if (mergedData.length === 0) {
+        throw new Error('Consolidation produced empty results');
+      }
+
+      setLlmConsolidationDebug(consolidationDebug);
+
+      // Save your updated data
       await saveHeavyData(currentSessionId, {
         fileTree,
         extractedTexts,
         summaries,
         extractedCompanies,
         rawResponses,
-        consolidatedCompanies: consolidatedData
+        consolidatedCompanies: mergedData,
       });
-  
-      router.push(`/companies?sessionId=${currentSessionId}`)
+
+      // Finally, redirect (or do whatever you need)
+      router.push(`/companies?sessionId=${currentSessionId}`);
     } catch (error) {
-      console.error('Consolidation error:', error)
-      alert(`Consolidation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      console.error('Consolidation error:', error);
+      alert(`Consolidation failed: ${
+        error instanceof Error ? error.message : 'Unknown error'
+      }`);
     } finally {
-      setIsConsolidating(false)
+      setIsConsolidating(false);
     }
-  }
+  };
 
   // ---------------------------
   // On Mount: Check User Auth
@@ -228,7 +377,7 @@ export default function Dashboard() {
       extractedTexts,
       summaries,
       extractedCompanies,
-      rawResponses
+      rawResponses,
     });
 
     setSuccessMessage('Session saved successfully!');
@@ -279,7 +428,6 @@ export default function Dashboard() {
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
 
-
       setRawResponses(heavyData.rawResponses || {});
 
       // 3) Rebuild the fileTree from base64
@@ -305,7 +453,6 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
-
         {/* Success Message */}
         {successMessage && (
           <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
@@ -313,10 +460,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* -----
-             File Upload Area
-             You can remove the inline code if your <FileUploadArea> handles everything.
-         ----- */}
+        {/* File Upload Area */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <FileUploadArea
             processZip={processZip}
@@ -329,7 +473,6 @@ export default function Dashboard() {
         {/* Model Selector + Optional Info Icon */}
         <div className="flex items-center gap-2 mb-4">
           <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
-          {/* Optionally show an info icon */}
           <InformationCircleIcon className="h-5 w-5 text-gray-500" title="Select your model" />
         </div>
 
@@ -358,7 +501,9 @@ export default function Dashboard() {
             <FileTree
               nodes={fileTree}
               onSelect={handleFileSelect}
-              selectedFile={selectedFile ? { ...selectedFile, content: selectedFile.content || '' } : null}
+              selectedFile={
+                selectedFile ? { ...selectedFile, content: selectedFile.content || '' } : null
+              }
               onToggleConversion={(path) => {
                 const updateNodes = (nodes: FileNode[]): FileNode[] =>
                   nodes.map((n) => ({
@@ -407,7 +552,7 @@ export default function Dashboard() {
             onClick={handleConsolidateCompanies}
             disabled={isConsolidating || !currentSessionId}
             className={`px-4 py-2 rounded ${
-              isConsolidating || !currentSessionId 
+              isConsolidating || !currentSessionId
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}
@@ -415,10 +560,11 @@ export default function Dashboard() {
             {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
           </button>
         )}
-        {/* New: Toggle Button for Debug Info */}
+
+        {/* Toggle Button for Debug Info */}
         <button
           onClick={() => setShowDebug(!showDebug)}
-          className="mb-4 bg-gray-200 text-gray-800 px-3 py-1 rounded"
+          className="mb-4 bg-gray-200 text-gray-800 px-3 py-1 rounded ml-2"
         >
           {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
         </button>
@@ -429,20 +575,32 @@ export default function Dashboard() {
             {Object.entries(rawResponses).map(([filePath, debug]) => (
               <div key={filePath} className="mb-4 border-b pb-2">
                 <p className="font-medium text-gray-700">File: {filePath}</p>
-                <p className="text-sm text-gray-600"><span className="font-semibold">Prompt:</span> {debug.prompt}</p>
-                <p className="text-sm text-gray-600"><span className="font-semibold">Response:</span> {debug.response}</p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Prompt:</span> {debug.prompt}
+                </p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Response:</span> {debug.response}
+                </p>
               </div>
             ))}
-            {llmConsolidationDebug && (
+            {llmConsolidationDebug.length > 0 && (
               <div className="mt-4 border-t pt-2">
                 <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
-                <p className="text-sm text-gray-600"><span className="font-semibold">Prompt:</span> {llmConsolidationDebug.prompt}</p>
-                <p className="text-sm text-gray-600"><span className="font-semibold">Response:</span> {llmConsolidationDebug.response}</p>
+                {llmConsolidationDebug.map((debug, index) => (
+                  <div key={index} className="mb-4 border-b pb-2">
+                    <p className="text-sm text-gray-600">
+                      <span className="font-semibold">Prompt:</span> {debug.prompt}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      <span className="font-semibold">Response:</span> {debug.response}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
-        
+
         {/* Radio Buttons to change "contextType"? */}
         <ChatContextRadioButtons fileTree={fileTree} getAllFiles={getAllFiles} />
 
@@ -468,7 +626,6 @@ export default function Dashboard() {
           closeSaveModal={closeSaveModal}
           handleSaveConfirm={handleSaveConfirm}
         />
-
       </main>
 
       {/* Load Modal (rendered outside main for simplicity) */}
