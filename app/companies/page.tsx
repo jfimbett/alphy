@@ -13,16 +13,17 @@ interface VariableData {
 
 interface ConsolidatedCompany {
   name: string;
-  variables: Record<string, VariableData>; // varName -> { value, currency, unit }
+  variables: Record<string, Record<number, VariableData>>; 
   dates: string[];
 }
 
 export default function CompaniesPage() {
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('sessionId');
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
     const fetchConsolidatedData = async () => {
       if (!sessionId) return;
@@ -49,6 +50,19 @@ export default function CompaniesPage() {
 
     fetchConsolidatedData();
   }, [sessionId]);
+  
+  useEffect(() => {
+    if (companies.length > 0) {
+      const years = new Set<number>();
+      companies.forEach(company => {
+        Object.values(company.variables).forEach(variable => {
+          Object.keys(variable).forEach(year => years.add(parseInt(year)));
+        });
+      });
+      setAvailableYears(Array.from(years).sort((a, b) => b - a));
+      if (availableYears.length > 0) setSelectedYear(availableYears[0]);
+    }
+  }, [companies]);
 
   if (loading) {
     return (
@@ -64,88 +78,42 @@ export default function CompaniesPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
-      <main className="max-w-7xl mx-auto px-4 py-8 text-gray-800">
-        <h1 className="text-2xl font-bold mb-6">Consolidated Company Data</h1>
-
-        {companies.length === 0 && (
-          <p className="text-gray-700">
-            No consolidated data found for this session.
-          </p>
-        )}
-
-        <div className="space-y-6">
-          {companies.map((company, index) => (
-            <div key={index} className="bg-white p-6 rounded-lg shadow-sm">
-              {/* Company Name */}
-              <h2 className="text-xl font-semibold mb-4">{company.name}</h2>
-
-              {/* Variables */}
-              {company.variables && Object.keys(company.variables).length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(company.variables).map(([varName, varData]) => {
-                    // Safeguard if varData is missing or not an object
-                    if (!varData || typeof varData !== 'object') {
-                      return (
-                        <div key={varName} className="bg-gray-50 p-4 rounded">
-                          <div className="flex justify-between items-center">
-                            <span className="font-medium capitalize">
-                              {varName.replace(/_/g, ' ')}
-                            </span>
-                            <span className="text-sm text-gray-600">
-                              No structured data
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    let displayValue = 'N/A';
-                    // If numeric
-                    if (typeof varData.value === 'number') {
-                      displayValue = varData.value.toLocaleString();
-                    } else if (typeof varData.value === 'string') {
-                      displayValue = varData.value;
-                    }
-
-                    const displayCurrency = varData.currency || '';
-                    const displayUnit = varData.unit || '';
-
-                    return (
-                      <div key={varName} className="bg-gray-50 p-4 rounded">
-                        <div className="flex justify-between items-center">
-                          <span className="font-medium capitalize">
-                            {varName.replace(/_/g, ' ')}
-                          </span>
-                          <span className="text-sm text-gray-600">
-                            {displayCurrency} {displayValue}
-                            {displayUnit}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Dates */}
-              {Array.isArray(company.dates) && company.dates.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="font-medium mb-2">Relevant Dates</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {company.dates.map((date, idx) => (
-                      <span
-                        key={idx}
-                        className="bg-blue-100 px-3 py-1 rounded-full text-sm text-blue-800"
-                      >
-                        {date}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        <div className="flex justify-between items-center mb-6 text-gray-800">
+          <h1 className="text-2xl font-bold">Consolidated Company Data</h1>
+          <select 
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+            className="px-4 py-2 border rounded"
+          >
+            {availableYears.map(year => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
         </div>
+        
+        {/* Render variables for selected year */}
+        {companies.map(company => (
+          <div key={company.name} className="bg-white p-6 rounded-lg shadow-sm mb-4 text-gray-600">
+            <h2 className="text-xl font-semibold mb-4">{company.name}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(company.variables).map(([varName, years]) => {
+                const varData = years[selectedYear];
+                return varData ? (
+                  <div key={varName} className="bg-gray-50 p-4 rounded">
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium capitalize">{varName.replace(/_/g, ' ')}</span>
+                      <span className="text-sm text-gray-600">
+                        {varData.currency} {varData.value?.toLocaleString()}
+                        {varData.unit}
+                      </span>
+                    </div>
+                  </div>
+                ) : null;
+              })}
+            </div>
+          </div>
+        ))}
       </main>
     </div>
   );

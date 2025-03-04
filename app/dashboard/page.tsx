@@ -194,7 +194,8 @@ export default function Dashboard() {
 
   const handleSaveConfirm = async () => {
     try {
-      await saveSession();
+      const sessionId = await saveSession();
+      localStorage.setItem('currentSessionId', sessionId);
       setShowSaveModal(false);
     } catch (error) {
       console.error('Error in handleSaveConfirm:', error);
@@ -289,6 +290,8 @@ export default function Dashboard() {
       setChatHistory(heavyData.chatHistory || []);
       setExtractedTexts(heavyData.extractedTexts || {});
       setSummaries(heavyData.summaries || {});
+      localStorage.setItem('currentSessionId', sessionId);
+      setCurrentSessionId(sessionId);
     } catch (error) {
       console.error('Error loading session:', error);
       alert('Error loading session: ' + (error as Error).message);

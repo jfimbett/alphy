@@ -34,12 +34,16 @@ export const defaultConsolidationTemplate = `Consolidate all company information
 4. Maintain all dates associated with each company.
 5. Remove duplicates.
 
-Output format: [{
-  "name": "Company Name",
+Output JSON format:
+[{
+  "name": "Company",
   "variables": {
-    "variable_name": { "value": number, "currency": string, "unit": string }
+    "variable_name": {
+      "2022": { "value": 100, "currency": "USD" },
+      "2023": { "value": 150 }
+    }
   },
-  "dates": string[]
+  "dates": ["2023-01-01"]
 }]
 
 Raw Data: {rawData};`;
@@ -50,5 +54,9 @@ export const defaultVariableExtraction = `Out of the following text, identify wh
 
 here is the text, return the name of the variables in english, also be consistent across names and try not to duplicate them, Im looking mostly for accounting variables
 Also return the names of the variables in lower case and with underscores instead of spaces.
+
+List first the variables that would be traditionally in an Income Statement, 
+then the ones that would be in a Balance Sheet,
+and finally the ones that would be in a Cash Flow Statement.
 
 {text}`;

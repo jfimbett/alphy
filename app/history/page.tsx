@@ -18,6 +18,10 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // For custom "internal" delete confirmation
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null);
+
   // Fetch user sessions on mount
   useEffect(() => {
     const userId = localStorage.getItem('userId');
@@ -47,33 +51,45 @@ export default function HistoryPage() {
   }, [router]);
 
   // Delete a session
-  async function handleDeleteSession(sessionId: number) {
-    const userId = localStorage.getItem('userId') || '';
-     // First confirmation:
-    if (!confirm('Are you sure you want to delete this session?')) return;
-    // Second confirmation:
-    if (!confirm('This action is permanent and cannot be undone. Continue?')) return;
 
+  function handleOpenDeleteModal(session: SessionSummary) {
+    setSelectedSession(session);
+    setShowDeleteModal(true);
+  }
+
+  function handleCloseDeleteModal() {
+    setShowDeleteModal(false);
+    setSelectedSession(null);
+  }
+   // Actual deletion logic, only called upon modal confirmation
+   async function handleConfirmDelete() {
+    if (!selectedSession) return; // safety check
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, {
+      const userId = localStorage.getItem('userId') || '';
+      const res = await fetch(`/api/sessions/${selectedSession.session_id}`, {
         method: 'DELETE',
         headers: { 'x-user-id': userId }
       });
+
       if (!res.ok) {
         const d = await res.json();
         throw new Error(d.error || 'Failed to delete session');
       }
 
       // Remove it from local state
-      setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+      setSessions((prev) =>
+        prev.filter((s) => s.session_id !== selectedSession.session_id)
+      );
     } catch (err: unknown) {
+      console.error(err);
       if (err instanceof Error) {
         alert('Error deleting session: ' + err.message);
       } else {
-        alert('Error deleting session');
+        alert('Unknown error deleting session.');
       }
-      console.error(err);
+    } finally {
+      handleCloseDeleteModal();
     }
   }
 
@@ -95,7 +111,10 @@ export default function HistoryPage() {
         ) : (
           <ul className="space-y-4">
             {sessions.map((session) => (
-              <li key={session.session_id} className="border p-4 rounded bg-white flex justify-between">
+              <li
+                key={session.session_id}
+                className="border p-4 rounded bg-white flex justify-between"
+              >
                 <div>
                   <h2 className="text-lg font-semibold text-gray-600">
                     {session.session_name}
@@ -103,9 +122,7 @@ export default function HistoryPage() {
                   <p className="text-sm text-gray-600">
                     Created: {new Date(session.created_at).toLocaleString()}
                   </p>
-                  <p className="text-sm text-gray-600">
-                    {/*Files: {session.file_count}*/}
-                  </p>
+                  {/* <p className="text-sm text-gray-600">Files: {session.file_count}</p> */}
                 </div>
                 <div className="flex items-center gap-2">
                   {/* View Details */}
@@ -116,9 +133,9 @@ export default function HistoryPage() {
                     View Details
                   </button>
 
-                  {/* Trash Icon => Delete Session */}
+                  {/* Delete Session (opens our custom modal) */}
                   <button
-                    onClick={() => handleDeleteSession(session.session_id)}
+                    onClick={() => handleOpenDeleteModal(session)}
                     className="p-2 hover:bg-red-50 rounded"
                     title="Delete Session"
                   >
@@ -130,6 +147,36 @@ export default function HistoryPage() {
           </ul>
         )}
       </main>
+
+      {/* Our custom modal for delete confirmation */}
+      {showDeleteModal && selectedSession && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <div className="bg-white p-6 rounded shadow-md max-w-sm w-full">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">
+              Delete Session
+            </h2>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete the session "<strong>{selectedSession.session_name}</strong>"?
+              <br />
+              This action is <strong>permanent</strong> and cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleCloseDeleteModal}
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

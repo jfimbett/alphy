@@ -7,6 +7,7 @@ import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import AlphyAnimation from '@/components/AlphyAnimation';
 
 export default function Navbar() {
+  const [sessionId] = useState(localStorage.getItem('currentSessionId'));
   const [loggedIn, setLoggedIn] = useState(false);
   const [userEmail, setUserEmail] = useState('');
   const router = useRouter();
@@ -52,12 +53,15 @@ export default function Navbar() {
               <Link href="/history">
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
               </Link>
-              <Link href="/companies">
-                <span className="text-gray-700 hover:text-blue-600 transition-colors">Companies</span>
-              </Link>
-              <Link href="/data">
+              <Link 
+                    href={sessionId ? `/companies?sessionId=${sessionId}` : '/companies'}
+                    className="text-gray-700 hover:text-gray-900"
+                  >
+                    Companies
+                  </Link>
+              {/*<Link href="/data">
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">Financial Data</span>
-              </Link>
+              </Link>*/}
               {/* Settings icon */}
               <Link href="/settings" title="Settings">
                 <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />
