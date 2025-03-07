@@ -38,7 +38,7 @@ export default function DataPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-       <Navbar />
+     
       <main className="max-w-4xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
           SEC Financial Data Explorer

@@ -190,11 +190,11 @@ useEffect(() => {
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
-        <Navbar />
+     
         <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
           <p className="text-red-600">{error}</p>
         </main>
-        <Footer />
+   
       </div>
     );
   }
@@ -202,11 +202,11 @@ useEffect(() => {
   if (!session) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
-        <Navbar />
+    
         <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
           <p>Loading session details...</p>
         </main>
-        <Footer />
+     
       </div>
     );
   }

@@ -1,4 +1,3 @@
-// components/Navbar.tsx
 'use client';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -7,30 +6,34 @@ import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import AlphyAnimation from '@/components/AlphyAnimation';
 
 export default function Navbar() {
-  const [sessionId] = useState(localStorage.getItem('currentSessionId'));
+  const [sessionId, setSessionId] = useState<string | null>(null); // Initialize as null
   const [loggedIn, setLoggedIn] = useState(false);
   const [userEmail, setUserEmail] = useState('');
   const router = useRouter();
 
   useEffect(() => {
+    // Client-side only code
     if (typeof window !== 'undefined') {
+      const storedSessionId = localStorage.getItem('currentSessionId');
+      setSessionId(storedSessionId);
+
       const isLogged = localStorage.getItem('loggedIn') === 'true';
       setLoggedIn(isLogged);
       if (isLogged) {
         setUserEmail(localStorage.getItem('userEmail') || '');
       } else {
-        // Clear stale data if not logged in
         localStorage.removeItem('userEmail');
         localStorage.removeItem('userId');
       }
     }
-  }, []);
+  }, []); // Empty dependency array ensures this runs once on mount
 
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('loggedIn');
       localStorage.removeItem('userEmail');
       localStorage.removeItem('userId');
+      localStorage.removeItem('currentSessionId'); // Clear session ID on logout
     }
     setLoggedIn(false);
     router.push('/login');
@@ -40,8 +43,6 @@ export default function Navbar() {
     <nav className="bg-white shadow">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
         <Link href="/">
-          {/* Having some issues when reloading the website */}
-          {/*<AlphyAnimation />*/}
           <span className="text-gray-900 hover:text-blue-800 transition-colors font-bold text-xl">Alphy</span>
         </Link>
         <div className="flex items-center space-x-4">
@@ -54,15 +55,11 @@ export default function Navbar() {
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
               </Link>
               <Link 
-                    href={sessionId ? `/companies?sessionId=${sessionId}` : '/companies'}
-                    className="text-gray-700 hover:text-gray-900"
-                  >
-                    Companies
-                  </Link>
-              {/*<Link href="/data">
-                <span className="text-gray-700 hover:text-blue-600 transition-colors">Financial Data</span>
-              </Link>*/}
-              {/* Settings icon */}
+                href={sessionId ? `/companies?sessionId=${sessionId}` : '/companies'}
+                className="text-gray-700 hover:text-gray-900"
+              >
+                Companies
+              </Link>
               <Link href="/settings" title="Settings">
                 <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />
               </Link>

@@ -2,24 +2,29 @@ import { useState } from 'react';
 
 export default function ModelSelector({
   selectedModel,
-  onModelChange
+  onModelChange,
+  disabled
 }: {
   selectedModel: string;
   onModelChange: (model: string) => void;
+  disabled?: boolean;
 }) {
+  const models = [
+    'deepseek:deepseek-reasoner',
+    'deepseek:deepseek-chat',
+  ]
   return (
-    <div className="mb-4 text-gray-800">
-      <label className="block text-sm font-medium mb-1">AI Model</label>
-      <select
-        value={selectedModel}
-        onChange={(e) => onModelChange(e.target.value)}
-        className="w-full p-2 border rounded bg-white"
-      >
-        <optgroup label="DeepSeek Cloud">
-          <option value="deepseek:deepseek-reasoner">DeepSeek-R1</option>
-          <option value="deepseek:deepseek-chat">DeepSeek Chat</option>
-        </optgroup>
-      </select>
-    </div>
-  );
+    <select
+      value={selectedModel}
+      onChange={(e) => onModelChange(e.target.value)}
+      disabled={disabled}
+      className={`w-full p-2 border rounded ${disabled ? 'bg-gray-100' : ''}`}
+    >
+      {models.map((model) => (
+        <option key={model} value={model}>
+          {model.split(':')[1]}
+        </option>
+      ))}
+    </select>
+  )
 }

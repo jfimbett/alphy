@@ -4,7 +4,6 @@ import { useRef, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 // Components
-import Navbar from '@/components/Navbar';
 import FileTree, { FileNode } from '@/components/FileTree';
 import SelectedFilePanel from '@/components/dashboard/FilePreviewSection';
 import ChatSection from '@/components/dashboard/ChatSection';
@@ -27,6 +26,7 @@ import { InformationCircleIcon } from '@heroicons/react/24/outline';
 
 // Types
 import { SessionSummary } from '@/app/history/page';
+import { run } from 'node:test';
 
 // ---------------------------------------------------
 // Helper Functions (NEWLY ADDED)
@@ -137,7 +137,10 @@ export default function Dashboard() {
     handleChatSubmit,
   } = useChat();
 
-  const [selectedModel, setSelectedModel] = useState('deepseek:deepseek-reasoner');
+  const [selectedSummarizationModel, setSelectedSummarizationModel] = useState('deepseek:deepseek-chat');
+  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] = useState('deepseek:deepseek-reasoner');
+  const [runSummarization, setRunSummarization] = useState(true);
+  const [runInfoRetrieval, setRunInfoRetrieval] = useState(true);
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
   const [showExtracted, setShowExtracted] = useState(false);
@@ -166,17 +169,13 @@ export default function Dashboard() {
   // ---------------------------------------------------
   // Consolidate Companies (UPDATED)
   // ---------------------------------------------------
-  const handleConsolidateCompanies = async () => {
-    if (!currentSessionId) {
-      alert('Please save the session first');
-      return;
-    }
+  const handleConsolidateCompanies = async (sessionId: string) => {
 
     setIsConsolidating(true);
     try {
       // 1. Calculate token capacity
       const MAX_TOKENS = 65536;
-      const SAFETY_MARGIN = 1000;
+      const SAFETY_MARGIN = 5000;
       const systemMessage = 'You are a helpful assistant.'; // Use actual context if available
       const basePrompt = getConsolidationPrompt([]); // Get template without data
 
@@ -221,7 +220,7 @@ export default function Dashboard() {
 
       // 3. Process chunks in parallel with error handling
       const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-
+      debugger;
       const chunkPromises = chunks.map(async (chunk) => {
         const chunkPrompt = getConsolidationPrompt(chunk);
         try {
@@ -230,28 +229,56 @@ export default function Dashboard() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: chunkPrompt,
-              model: selectedModel,
+              model: selectedInfoRetrievalModel,
               format: 'json',
               requestType: 'consolidation',
             }),
           });
-
+      
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
+          
           const { content } = await res.json();
           const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
           consolidationDebug.push({ prompt: chunkPrompt, response: cleanedContent });
-
-          return JSON.parse(cleanedContent);
+      
+          // Validate response structure
+          const parsed = JSON.parse(cleanedContent);
+          if (!Array.isArray(parsed)) {
+            console.error('Invalid consolidation format - not an array:', parsed);
+            return [];
+          }
+          
+          // Validate minimum required fields
+          const validEntries = parsed.filter((item: any) => 
+            item?.name && item?.type && item?.variables
+          );
+          
+          return validEntries;
+      
         } catch (error) {
           console.error('Chunk processing failed:', error);
-          throw error;
+          return []; // Return empty array to prevent pipeline failure
         }
       });
 
       // 4. Process all chunks and merge results
       const chunkResults = await Promise.all(chunkPromises);
-      const mergedData = mergeConsolidatedCompanies(chunkResults.flat());
+      const validResults = chunkResults.filter(Array.isArray);
+
+      if (validResults.length === 0) {
+        throw new Error('All consolidation chunks failed validation');
+      }
+
+      const mergedData = mergeConsolidatedCompanies(validResults.flat());
+
+      // Add final validation
+      if (!mergedData || mergedData.length === 0) {
+        console.error('Final merged data validation failed:', {
+          chunkResults,
+          mergedData
+        });
+        throw new Error('Consolidation produced empty results');
+      }
 
       // 5. Final validation and save
       if (mergedData.length === 0) {
@@ -261,7 +288,7 @@ export default function Dashboard() {
       setLlmConsolidationDebug(consolidationDebug);
 
       // Save your updated data
-      await saveHeavyData(currentSessionId, {
+      await saveHeavyData(sessionId, {
         fileTree,
         extractedTexts,
         summaries,
@@ -270,8 +297,13 @@ export default function Dashboard() {
         consolidatedCompanies: mergedData,
       });
 
+      console.log('Raw chunk data:', chunks);
+      console.log('Chunk prompts:', chunks.map(chunk => getConsolidationPrompt(chunk)));
+      console.log('LLM Responses:', llmConsolidationDebug);
+      console.log('Merged data:', mergedData);
+
       // Finally, redirect (or do whatever you need)
-      router.push(`/companies?sessionId=${currentSessionId}`);
+      router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
       alert(`Consolidation failed: ${
@@ -343,7 +375,9 @@ export default function Dashboard() {
 
   const handleSaveConfirm = async () => {
     try {
-      const sessionId = await saveSession();
+       // Get the session name from your state (you'll need to ensure this is populated)
+      const sessionName = newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
+      const sessionId = await saveSession(sessionName);
       localStorage.setItem('currentSessionId', sessionId);
       setShowSaveModal(false);
     } catch (error) {
@@ -352,36 +386,33 @@ export default function Dashboard() {
     }
   };
 
-  async function saveSession(): Promise<string> {
-    // 1) Convert rawData -> base64
+  async function saveSession(sessionName: string): Promise<string> {
     const fileTreeWithBase64 = addBase64ToTree(fileTree);
 
-    // 2) Create a minimal session row in DB
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-user-id': localStorage.getItem('userId') || '',
       },
-      body: JSON.stringify({
-        sessionName: newUploadName.trim(),
-      }),
+      body: JSON.stringify({ sessionName }),
     });
     if (!res.ok) throw new Error('Failed to save session');
     const data = await res.json();
+
     setCurrentSessionId(data.session_id);
 
-    // 3) Store heavy data (fileTree, chatHistory, extracted, summaries)
     await saveHeavyData(data.session_id, {
-      fileTree: fileTreeWithBase64,
-      extractedTexts,
-      summaries,
-      extractedCompanies,
-      rawResponses,
-    });
+        fileTree: fileTreeWithBase64,
+        extractedTexts,
+        summaries,
+        extractedCompanies,
+        rawResponses,
+      });
+
+    setCurrentSessionId(data.session_id);
 
     setSuccessMessage('Session saved successfully!');
-    setTimeout(() => setSuccessMessage(''), 5000);
 
     return data.session_id;
   }
@@ -451,7 +482,6 @@ export default function Dashboard() {
   // ---------------------------
   return (
     <div className="min-h-screen bg-gray-50 relative">
-      <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Success Message */}
         {successMessage && (
@@ -470,10 +500,41 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Model Selector + Optional Info Icon */}
-        <div className="flex items-center gap-2 mb-4">
-          <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
-          <InformationCircleIcon className="h-5 w-5 text-gray-500" title="Select your model" />
+        {/* Replace the existing ModelSelector section with this */}
+        <div className="space-y-4 mb-6 text-gray-600">
+          <div className="bg-white p-4 rounded-lg">
+            <label className="flex items-center gap-3 mb-2">
+              <input
+                type="checkbox"
+                checked={runSummarization}
+                onChange={(e) => setRunSummarization(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <span className="font-medium">Enable Summarization</span>
+            </label>
+            <ModelSelector
+              selectedModel={selectedSummarizationModel}
+              onModelChange={setSelectedSummarizationModel}
+              disabled={!runSummarization}
+            />
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow-sm">
+            <label className="flex items-center gap-3 mb-2">
+              <input
+                type="checkbox"
+                checked={runInfoRetrieval}
+                onChange={(e) => setRunInfoRetrieval(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <span className="font-medium">Enable Information Retrieval</span>
+            </label>
+            <ModelSelector
+              selectedModel={selectedInfoRetrievalModel}
+              onModelChange={setSelectedInfoRetrievalModel}
+              disabled={!runInfoRetrieval}
+            />
+          </div>
         </div>
 
         {/* If we have a file tree, show Analyze + Save Buttons */}
@@ -482,8 +543,32 @@ export default function Dashboard() {
             <div className="mb-4 flex items-center justify-between">
               <FileAnalysisButtons
                 fileTree={fileTree}
-                selectedModel={selectedModel}
-                analyzeFiles={analyzeFiles}
+                summarizationModel={runSummarization ? selectedSummarizationModel : ''}
+                infoRetrievalModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
+                consolidationModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
+                runSummarization={runSummarization}
+                runInfoRetrieval={runInfoRetrieval}
+                analyzeFiles={async () => {
+                  try {
+                    // Run analysis
+                        await analyzeFiles({
+                          runSummarization,
+                          runInfoRetrieval,
+                          summarizationModel: runSummarization ? selectedSummarizationModel : undefined,
+                          infoRetrievalModel: runInfoRetrieval ? selectedInfoRetrievalModel : undefined
+                        });
+                  
+                        // Auto-save session with generated name
+                        const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
+                        const sessionId = await saveSession(sessionName);
+                        
+                        // Trigger consolidation with the new session ID
+                        await handleConsolidateCompanies(sessionId);
+                      } catch (error) {
+                        console.error('Processing error:', error);
+                        alert("Analysis failed: " + (error instanceof Error ? error.message : 'Unknown error'));
+                      }
+                    }}
                 openSaveModal={openSaveModal}
                 toggleAllFiles={toggleAllFiles}
                 allSelected={allSelected}
@@ -549,7 +634,13 @@ export default function Dashboard() {
 
         {fileTree.length > 0 && (
           <button
-            onClick={handleConsolidateCompanies}
+            onClick={() => {
+              if (!currentSessionId) {
+                alert('Please save the session first');
+                return;
+              }
+              handleConsolidateCompanies(currentSessionId);
+            }}
             disabled={isConsolidating || !currentSessionId}
             className={`px-4 py-2 rounded ${
               isConsolidating || !currentSessionId
@@ -600,23 +691,7 @@ export default function Dashboard() {
             )}
           </div>
         )}
-
-        {/* Radio Buttons to change "contextType"? */}
-        <ChatContextRadioButtons fileTree={fileTree} getAllFiles={getAllFiles} />
-
-        {/* Chat Section */}
-        <ChatSection
-          chatHistory={chatHistory}
-          formRef={formRef}
-          handleChatSubmit={handleChatSubmit}
-          extractedTexts={extractedTexts}
-          selectedFile={selectedFile}
-          highlightedFiles={highlightedFiles}
-          chatMessage={chatMessage}
-          setChatMessage={setChatMessage}
-          isChatLoading={isChatLoading}
-          selectedModel={selectedModel}
-        />
+    
 
         {/* Save Modal */}
         <SaveModal

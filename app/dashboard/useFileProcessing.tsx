@@ -186,7 +186,12 @@ export function useFileProcessing() {
   // ======================
   // ANALYZE FILES
   // ======================
-  const analyzeFiles = async (model: string) => {
+  const analyzeFiles = async (options: {
+    runSummarization: boolean
+    runInfoRetrieval: boolean
+    summarizationModel?: string
+    infoRetrievalModel?: string
+  }) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
       setProcessingPhase('extracting');
@@ -253,6 +258,11 @@ export function useFileProcessing() {
         setProgress(Math.round((processedCount / total) * 100));
       }
       setExtractedTexts(newExtractedTexts);
+
+      const textEntries = Object.entries(newExtractedTexts);
+
+      if (options.runSummarization && options.summarizationModel) {
+
       // Phase 2: Summarization
       setProcessingPhase('summarizing');
       setProgress(0);
@@ -260,7 +270,7 @@ export function useFileProcessing() {
 
       const newSummaries: Record<string, string> = {};
       let summaryCount = 0;
-      const textEntries = Object.entries(newExtractedTexts);
+      
 
       for (const [fullPath, text] of textEntries) {
         try {
@@ -278,7 +288,7 @@ export function useFileProcessing() {
               body: JSON.stringify({
                 prompt,
                 history: [],
-                model: model,
+                model: options.summarizationModel,
                 requestType: 'summarize',
               }),
             });
@@ -303,8 +313,9 @@ export function useFileProcessing() {
       }
 
       setSummaries(newSummaries);
+    }
 
-
+    if (options.runInfoRetrieval && options.infoRetrievalModel) {
       setProcessingPhase('extracting_companies');
       setProgress(0);
       setProcessedFiles(0);
@@ -324,7 +335,7 @@ export function useFileProcessing() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt: variables_prompt,
-            model: model,
+            model: options.infoRetrievalModel,
             format: 'json',
             requestType: 'extract',
           }),
@@ -366,7 +377,7 @@ export function useFileProcessing() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 prompt: extractionPrompt,
-                model: model,
+                model: options.infoRetrievalModel,
                 format: 'json',
                 requestType: 'extract',
               }),
@@ -406,6 +417,7 @@ export function useFileProcessing() {
       }
       
       setExtractedCompanies(newExtractedCompanies);
+    }
       
       } catch (error) {
         console.error('Processing error:', error);

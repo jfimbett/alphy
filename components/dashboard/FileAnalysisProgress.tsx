@@ -2,8 +2,17 @@ import React from "react";
 
 type FileAnalysisButtonsProps = {
   fileTree: any[];
-  selectedModel: string;
-  analyzeFiles: (model: string) => void;
+  summarizationModel: string;
+  infoRetrievalModel: string;
+  consolidationModel: string;
+  runSummarization: boolean;
+  runInfoRetrieval: boolean;
+  analyzeFiles: (params: {
+    runSummarization: boolean;
+    runInfoRetrieval: boolean;
+    summarizationModel: string;
+    infoRetrievalModel: string;
+  }) => void;
   openSaveModal: () => void;
   toggleAllFiles: (state: boolean) => void;
   allSelected: boolean;
@@ -18,7 +27,11 @@ type FileAnalysisButtonsProps = {
 
 const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
   fileTree,
-  selectedModel,
+  summarizationModel,
+  infoRetrievalModel,
+  consolidationModel,
+  runSummarization,
+  runInfoRetrieval,
   analyzeFiles,
   openSaveModal,
   toggleAllFiles,
@@ -37,13 +50,18 @@ const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
     <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <button
-            onClick={() => analyzeFiles(selectedModel)}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
-            disabled={isAnalyzing}
-          >
-            {isAnalyzing ? "Analyzing..." : "Analyze Files"}
-          </button>
+        <button
+          onClick={() => analyzeFiles({
+            runSummarization,
+            runInfoRetrieval,
+            summarizationModel,
+            infoRetrievalModel
+          })} // Changed from () => analyzeFiles(...)
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+          disabled={isAnalyzing}
+        >
+          {isAnalyzing ? "Analyzing..." : "Analyze Files"}
+        </button>
           <button
             onClick={openSaveModal}
             className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors"

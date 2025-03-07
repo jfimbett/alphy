@@ -53,7 +53,7 @@ export async function POST(req: Request) {
       const requestPayload = {
         model: modelName,
         messages,
-        temperature: 0.1,
+        temperature: 0.0,
         max_tokens: 8000,
         stream: false,
         //response_format: format === 'json' ? { type: 'json_object' } : undefined
@@ -94,6 +94,17 @@ export async function POST(req: Request) {
         const data = JSON.parse(responseText);
 
         let content = '';
+
+        if (requestType === 'consolidation') {
+          const rawContent = data.choices[0].message.content;
+          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+          
+          // Validate basic structure
+          if (!content.startsWith('[') || !content.endsWith(']')) {
+            console.error('Invalid consolidation structure:', content);
+            content = '[]'; // Return empty array as fallback
+          }
+        }
 
         if (requestType === 'summarize') {
           // For summaries, use the message content directly

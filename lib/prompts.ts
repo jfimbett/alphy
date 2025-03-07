@@ -27,26 +27,33 @@ Rules:
 Document Text:
 {documentText};`;
 
-export const defaultConsolidationTemplate = `Consolidate all company information from these documents into a structured JSON format. Follow these rules:
-1. Group information by company name.
-2. Standardize variable names (snake_case, English).
-3. Split currency and values (e.g., "NOK 28.0m" → {value: 28.0, currency: "NOK", unit: "m"}).
-4. Maintain all dates associated with each company.
-5. Remove duplicates.
-
-Output JSON format:
+// Update the consolidation template to be more explicit
+export const defaultConsolidationTemplate = `Consolidate company data STRICTLY using this format:
 [{
-  "name": "Company",
+  "name": "Exact Company Name",
+  "type": "company/fund",
+  "description": "Max 1 paragraph",
   "variables": {
-    "variable_name": {
-      "2022": { "value": 100, "currency": "USD" },
-      "2023": { "value": 150 }
+    "snake_case_name": {
+      "YYYY": { 
+        "value": number, 
+        "currency": "XXX", 
+        "unit": "m/k/b" 
+      }
     }
   },
-  "dates": ["2023-01-01"]
+  "dates": ["YYYY-MM-DD"]
 }]
 
-Raw Data: {rawData};`;
+Rules:
+1. ALWAYS return an array, even if empty
+2. Use EXACT names from source data
+3. Include ALL variables from raw data
+4. Convert all values to numbers where possible
+
+RAW DATA: {rawData}
+
+OUTPUT:`;
 
 export const defaultVariableExtraction = `Out of the following text, identify what financial variables are referenced, the text can be written in languages different than english, return me only the list of variables without the values
 
@@ -57,6 +64,9 @@ Also return the names of the variables in lower case and with underscores instea
 
 List first the variables that would be traditionally in an Income Statement, 
 then the ones that would be in a Balance Sheet,
-and finally the ones that would be in a Cash Flow Statement.
+then the ones that would be in a Cash Flow Statement,
+one that includes the description of the company, maximum one paragraph,
+one that includes a variable that is the type of company, if it is a company or a fund, 
+if the whole business of the company is to invest in other companies then consider it a fund.
 
 {text}`;

@@ -1,1407 +1,2605 @@
-File: app/api\account-data\route.tsx
+File: components\AlphyAnimation.tsx
 ----------------------------------------
-// app/api/account-data/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    // e.g. "AccountsPayableCurrent"
-    const accountParam = searchParams.get("account") ?? ""
-    // e.g. "2022" or "2023"
-    const yearParam = searchParams.get("year") ?? ""
-
-    if (!accountParam) {
-      return NextResponse.json({ error: "Missing 'account' query param" }, { status: 400 })
-    }
-
-    // Remote endpoint might be something like:
-    //    /all_data_for_account?account=AccountsPayableCurrent&year=2022&api_token=...
-    const remoteUrl = `${BASE_URL}/all_data_for_account?account=${accountParam}&year=${yearParam}&api_token=${API_TOKEN}`
-
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/account-data route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\all-accounts\route.tsx
-----------------------------------------
-// app/api/all-accounts/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN  
-
-export async function GET() {
-  try {
-    // Build remote URL
-    const remoteUrl = `${BASE_URL}/all_accounts?api_token=${API_TOKEN}`
-    console.log("Fetching from:", remoteUrl) 
-    // Server-to-server fetch => no CORS issue
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/all-accounts route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\auth\login\route.tsx
-----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    const userRes = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    client.release();
-    if (userRes.rowCount === 0) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    const user = userRes.rows[0];
-    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!passwordMatch) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    // Return user data (do not include the password hash)
-    const userData = { user_id: user.user_id, email: user.email };
-    return NextResponse.json({ success: true, user: userData }, { status: 200 });
-  } catch (error) {
-    console.error('Error in login:', error);
-    return NextResponse.json({ error: 'Error logging in' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\auth\signup\route.tsx
-----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password, company, reason } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    // Check if the user already exists
-    const userCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userCheck && userCheck.rowCount !== null && userCheck.rowCount > 0) {
-      client.release();
-      return NextResponse.json({ error: 'User already exists' }, { status: 400 });
-    }
-    // Hash the password
-    const salt = bcrypt.genSaltSync(10);
-    const password_hash = bcrypt.hashSync(password, salt);
-    // Insert new user
-    const result = await client.query(
-      `INSERT INTO users (email, password_hash, company, reason) 
-       VALUES ($1, $2, $3, $4) RETURNING user_id, email`,
-      [email, password_hash, company, reason]
-    );
-    client.release();
-    return NextResponse.json({ success: true, user: result.rows[0] }, { status: 200 });
-  } catch (error) {
-    console.error('Error in signup:', error);
-    return NextResponse.json({ error: 'Error signing up' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\company-facts\route.tsx
-----------------------------------------
-// app/api/company-facts/route.ts
-
-import { NextResponse } from "next/server"
-
-// We'll assume you're using .env for the base URL and token.
-// If not, you can hardcode them here.
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    // 1) Extract query params from the incoming request
-    const { searchParams } = new URL(request.url)
-    // e.g. "320193"
-    const cik = searchParams.get("cik") ?? ""
-
-    // 2) Build the remote URL
-    const remoteUrl = `${BASE_URL}/company_facts?cik=${cik}&api_token=${API_TOKEN}`
-
-    console.log("Fetching from:", remoteUrl)
-
-    // 3) Fetch from the external API (server-to-server, no CORS issues here)
-    const response = await fetch(remoteUrl, {
-      method: "GET",
-    })
-
-    if (!response.ok) {
-      // e.g. 404, 500, ...
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    // 4) Return the JSON response to the client
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\files\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const formData = await request.formData();
-    const files = formData.getAll('files') as File[];
-    
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
-    }
-
-    const insertedFiles = [];
-    
-    for (const file of files) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const result = await client.query(
-        `INSERT INTO files 
-         (user_id, file_name, file_type, file_data, session_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING file_id`,
-         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
-      );
-      insertedFiles.push(result.rows[0].file_id);
-    }
-
-    return NextResponse.json({ success: true, fileIds: insertedFiles });
-  } catch (error) {
-    console.error('File upload error:', error);
-    return NextResponse.json({ error: 'File upload failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query(`SELECT * FROM files;`);
-    client.release();
-
-    return NextResponse.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error fetching files' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\files\[fileId]\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-
-export async function GET(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const fileId = parseInt(params.fileId);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    const result = await client.query(
-      `SELECT file_name, file_type, file_data 
-       FROM files 
-       WHERE file_id = $1`,
-      [fileId]
-    );
-
-    if (result.rowCount === 0) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    const file = result.rows[0];
-    return new NextResponse(file.file_data, {
-      headers: {
-        'Content-Type': file.file_type,
-        'Content-Disposition': `attachment; filename="${file.file_name}"`
-      }
-    });
-  } catch (error) {
-    console.error('File download error:', error);
-    return NextResponse.json({ error: 'File download failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  let client;
-  try {
-    client = await pool.connect();
-    const fileId = parseInt(params.fileId, 10);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    // Remove any extractions for this file, then remove the file itself
-    await client.query('DELETE FROM extractions WHERE file_id = $1', [fileId]);
-    await client.query('DELETE FROM files WHERE file_id = $1', [fileId]);
-
-    client.release();
-    return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error('Error deleting file:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error deleting file' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\financial-data\route.tsx
-----------------------------------------
-// app/api/financial-data/route.ts
-import { NextResponse } from "next/server"
-import { Pool } from 'pg';
-
-const pool = new Pool({
-    port: 5432,
-    host: 'localhost',
-    user: 'postgres',
-    password: '1234',
-    database: 'sec_financial_data',
-});
-
-export async function GET(request: Request) {
-  try {
-    // 1) Parse query params from the URL
-    const { searchParams } = new URL(request.url)
-    const nameParam = (searchParams.get("name") ?? "").trim().toLowerCase()
-    const tickerParam = (searchParams.get("ticker") ?? "").trim().toLowerCase()
-    const cikParam = (searchParams.get("cik") ?? "").trim()
-
-    // 2) Prepare placeholders.
-    //    For name, we use a LIKE pattern if it's not empty: '%<name>%'
-    //    For ticker, we do an exact match but case-insensitive, so we store it in lowercase and compare with LOWER(t.ticker).
-    //    For cik, we do an exact match.
-    const nameFilter = nameParam ? `%${nameParam}%` : ""
-    const tickerFilter = tickerParam // empty if none provided
-    const cikFilter = cikParam // empty if none provided
-
-    // 3) Connect to the database
-    const client = await pool.connect()
-
-    // 4) Build and run the query
-    //    Explanation:
-    //    - LEFT JOIN `tickers` so we can gather possible tickers per `companies` row
-    //    - Filter with a combination of name, ticker, and/or cik
-    //    - If the corresponding parameter is empty, we skip that filter
-    //    - Group by c.cik, c.name so we can do array_agg on the tickers
-    const sql = `
-      SELECT
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) AS tickers
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE
-        ($1 = '' OR LOWER(c.name) LIKE $1)
-        AND ($2 = '' OR LOWER(t.ticker) = $2)
-        AND ($3 = '' OR c.cik = $3)
-      GROUP BY c.cik, c.name
-      ORDER BY c.name ASC
-      LIMIT 50;
-    `
-
-    const result = await client.query(sql, [
-      nameFilter,
-      tickerFilter,
-      cikFilter,
-    ])
-
-    client.release()
-
-    // 5) Return JSON response
-    return NextResponse.json(result.rows)
-  } catch (error) {
-    console.error("Error in /api/financial-data:", error)
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    )
-  }
-}
-
-----------------------------------------
-
-File: app/api\llm\route.tsx
-----------------------------------------
-// app/api/llm/route.ts
-import { NextResponse } from 'next/server'
-import pool from '@/utils/db';
-
-export const dynamic = 'force-dynamic';
-
-interface DeepSeekError {
-  error: {
-    message: string;
-    type: string;
-    code: string;
-  };
-}
-
-export async function POST(req: Request) {
-  const body = await req.json();
-  const { prompt, context, history, model, format, requestType } = body || {};
-
-  if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: "Invalid prompt" }, { status: 300 });
-  }
-
-  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
-  const userId = req.headers.get('x-user-id');
-
-  if (DEVELOPMENT) {
-    await new Promise(res => setTimeout(res, 500));
-    return NextResponse.json({
-      content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
-      tokensUsed: 42
-    });
-  }
-
-  try {
-    
-    if (model?.startsWith('deepseek:')) {
-      const deepseekKey = process.env.DEEPSEEK_API_KEY;
-      if (!deepseekKey) {
-        console.error('DeepSeek API key missing');
-        return NextResponse.json(
-          { error: 'DeepSeek API key not configured' },
-          { status: 500 }
-        );
-      }
-
-      const modelName = model.replace('deepseek:', '');
-      const messages = [
-        { role: 'system', content: context || 'You are a helpful assistant.' },
-        ...(Array.isArray(history) ? history : []),
-        { role: 'user', content: prompt }
-      ];
-
-      const requestPayload = {
-        model: modelName,
-        messages,
-        temperature: 0.1,
-        max_tokens: 8000,
-        stream: false,
-        //response_format: format === 'json' ? { type: 'json_object' } : undefined
-      };
-
-      const startTime = Date.now();
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${deepseekKey}`
-        },
-        body: JSON.stringify(requestPayload)
-      });
-
-      const responseTime = Date.now() - startTime;
-      const responseText = await response.text();
-      
-      
-
-      if (!response.ok) {
-        console.error('DeepSeek API Error Details:', {
-          status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          body: responseText
-        });
-        return NextResponse.json(
-          { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
-          { status: 500 }
-        );
-      }
-
-      try {
-        if (requestType === 'consolidation') {
-        console.log('Consolidation Response:', responseText);
-        }
-
-        const data = JSON.parse(responseText);
-
-        let content = '';
-
-        if (requestType === 'summarize') {
-          // For summaries, use the message content directly
-          content = data.choices[0].message.content;
-        } else if (requestType === 'consolidation' || requestType === 'extract') {
-           // For structured data, clean JSON formatting
-          const rawContent = data.choices[0].message.content;
-          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
-        } else {
-          content = data.choices[0].message.content;
-        }
-
-        return NextResponse.json({
-          content: content,
-          tokensUsed: data.usage?.total_tokens || 0
-        });
-      } catch (parseError) {
-        if (requestType === 'summarize') {
-          return NextResponse.json({
-            content: responseText, // Return raw text if JSON parse fails
-            tokensUsed: 0
-          });
-        }
-        console.error('Response JSON Parse Error:', parseError);
-        return NextResponse.json(
-          { error: 'Failed to parse API response', response: responseText },
-          { status: 500 }
-        );
-      }
-    }
-
-    if (model?.startsWith('openai:')) {
-      // commented for now
-    }
-
-    return NextResponse.json(
-      { error: 'Unsupported model provider' },
-      { status: 400 }
-    );
-
-  } catch (error) {
-    console.error('LLM Processing Error:', error);
-    return NextResponse.json(
-      { error: 'LLM processing failed', details: error instanceof Error ? error.message : String(error) },
-      { status: 500 }
-    );
-  }
-}
-----------------------------------------
-
-File: app/api\search\route.tsx
-----------------------------------------
-// app/api/search/route.ts
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('query') || '';
-
-  try {
-    const client = await pool.connect();
-    const searchQuery = `
-      SELECT 
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) as tickers,
-        ts_rank(to_tsvector('english', c.name), plainto_tsquery('english', $1)) as rank
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE 
-        to_tsvector('english', c.name) @@ plainto_tsquery('english', $1) OR
-        t.ticker = $1 OR
-        c.cik = $1
-      GROUP BY c.cik, c.name
-      ORDER BY rank DESC
-      LIMIT 10;
-    `;
-
-    const result = await client.query(searchQuery, [query]);
-    client.release();
-
-    return NextResponse.json(result.rows.map(row => ({
-      ...row,
-      searchTerm: row.tickers.includes(query.toUpperCase()) ? query.toUpperCase() : row.cik === query ? query : row.name
-    })));
-  } catch  {
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-----------------------------------------
-
-File: app/api\session-file\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import mime from 'mime'; // install via `npm install mime` if you want to do more robust MIME detection
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get('sessionId');
-    const filePath = searchParams.get('filePath');
-
-    if (!sessionId || !filePath) {
-      return NextResponse.json(
-        { error: 'Missing sessionId or filePath' },
-        { status: 400 }
-      );
-    }
-
-    // Construct the absolute path on disk
-    const absolutePath = path.join(
-      process.cwd(),
-      'data',
-      sessionId,
-      decodeURIComponent(filePath) // Add URI decoding
-    );
-
-    console.log('Serving file:', absolutePath);
-
-    if (!fs.existsSync(absolutePath)) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    // Read file from disk
-    const fileBuffer = fs.readFileSync(absolutePath);
-
-    // Infer MIME type from the filename extension, or fall back to octet-stream
-    const mimeType = mime.getType(absolutePath) || 'application/octet-stream';
-
-    const headers = {
-      'Content-Type': mimeType,
-      'Content-Disposition': `inline; filename="${path.basename(absolutePath)}"`,
-    };
-    // Add proper PDF content disposition
-    if (mimeType === 'application/pdf') {
-      headers['Content-Disposition'] = `inline; filename="${path.basename(absolutePath)}"`;
-    } else {
-      headers['Content-Disposition'] = `attachment; filename="${path.basename(absolutePath)}"`;
-    }
-
-    // Return the file bytes in the response
-    return new NextResponse(fileBuffer, {
-      headers: headers,
-    });
-  } catch (error) {
-    console.error('Error serving file:', error);
-    return NextResponse.json({ error: 'File serving error' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\sessions\route.tsx
-----------------------------------------
-// app/api/sessions/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-// app/api/sessions/route.tsx
-export async function GET(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  
-
-    const result = await client.query(`
-      SELECT 
-        s.session_id,
-        s.session_name,
-        s.created_at,
-        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
-      FROM sessions s
-      WHERE s.user_id = $1
-      ORDER BY s.created_at DESC
-    `, [userId]);
-
-
-    
-    const sessions = result.rows.map((row) => ({
-      session_id: row.session_id,
-      session_name: row.session_name,
-      created_at: row.created_at,
-      file_count: row.file_count
-    }));
-
-    return NextResponse.json({ sessions });
-  } catch (error) {
-    console.error('Session load error:', error);
-    //alert(error);
-    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { sessionName } = await request.json();
-
-
-    //columns  session_id | user_id | session_name | created_at | expires_at
-    const result = await client.query(`
-      INSERT INTO sessions (user_id, session_name)
-      VALUES ($1, $2)
-      RETURNING session_id, created_at
-    `, [userId, sessionName]);
-
-   
-    const sessionId = result.rows[0].session_id;
-
-    await client.query('COMMIT');
-    return NextResponse.json({
-      success: true,
-      session_id: sessionId,
-      created_at: result.rows[0].created_at
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Session save error:', error);
-    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-----------------------------------------
-
-File: app/api\sessions\[sessionId]\route.tsx
-----------------------------------------
-// app/api/sessions/[sessionId]/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import fs from 'fs';
-import path from 'path';
-
-export async function GET(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-
-    const res = await client.query(
-      `SELECT session_id, session_name, created_at
-         FROM sessions
-        WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (res.rowCount === 0) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    const session = res.rows[0];
-    return NextResponse.json({ session });
-  } catch (error) {
-    console.error('Error fetching session:', error);
-    return NextResponse.json({ error: 'Error fetching session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-    // Optionally, remove the session reference from files (set session_id to NULL)
-    await client.query(
-      `UPDATE files SET session_id = NULL WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    const deleteResult = await client.query(
-      `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (deleteResult.rowCount === 0) {
-      // Nothing to delete or unauthorized
-      await client.query('ROLLBACK');
-      return NextResponse.json(
-        { error: 'Session not found or not authorized' },
-        { status: 404 }
-      );
-    }
-
-    await client.query('COMMIT');
-
-     // 3) Remove the session folder from disk (best-effort)
-    // data/<sessionId> is the folder holding heavyData.json + /files
-    const sessionPath = path.join(process.cwd(), 'data', String(sId));
-    try {
-      // Node 14 and below do not support fs.rmSync, so if you need older Node, use rmdirSync.
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      console.log(`Deleted directory: ${sessionPath}`);
-    } catch (err) {
-      // Not critical if folder removal fails – but we log it.
-      console.error(`Failed to remove folder ${sessionPath}:`, err);
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error deleting session:', error);
-    return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-----------------------------------------
-
-File: app/api\store-heavy-data\route.tsx
-----------------------------------------
-// app/api/store-heavy-data/route.ts
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { FileNode } from '@/components/FileTree';
-
-export async function POST(request: Request) {
-  try {
-    const { sessionId, heavyData } = await request.json();
-    if (!sessionId) {
-      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-    }
-
-    // 1) Create the directory structure: data/sessionId/files
-    const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
-    const filesDir = path.join(dataDir, 'files');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    if (!fs.existsSync(filesDir)) {
-      fs.mkdirSync(filesDir);
-    }
-
-    // 2) For each file node in fileTree, decode base64 -> raw file
-    function storeFilesRecursively(nodes: FileNode[]): FileNode[] {
-      return nodes.map((node, idx) => {
-        if (node.type === 'folder' && node.children) {
-          return { ...node, children: storeFilesRecursively(node.children) };
-        }
-        if (node.type === 'file' && node.base64Data) {
-          // decode base64
-          const buffer = Buffer.from(node.base64Data, 'base64');
-          // create a unique filename. You can also keep the original name if you prefer
-          // but we add idx or a timestamp to avoid collisions:
-          const safeName = node.name.replace(/[^\w\d.]+/g, '_');
-          const fileName = `file_${Date.now()}_${idx}_${safeName}`;
-          const filePath = path.join(filesDir, fileName);
-
-          // 3) Write the file to data/sessionId/files/
-          fs.writeFileSync(filePath, buffer);
-
-          // 4) Remove base64Data from the node, and add localPath
-          return {
-            ...node,
-            base64Data: undefined,
-            rawData: undefined,
-            localPath: `files/${fileName}`
-          };
-        }
-        return node;
-      });
-    }
-
-    // If there's a fileTree, store each file on disk
-    let updatedFileTree: FileNode[] = [];
-    if (heavyData.fileTree) {
-      updatedFileTree = storeFilesRecursively(heavyData.fileTree);
-    }
-
-    // 5) Overwrite heavyData.fileTree with the updated one
-    const filePath = path.join(dataDir, 'heavyData.json');
-    const existingData = fs.existsSync(filePath) 
-                ? JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-                : {};
-
-    const finalHeavyData = {
-      ...existingData,
-      ...heavyData,
-      fileTree: updatedFileTree
-    };
-
-    
-    fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
-
-
-
-
-
-    return NextResponse.json({ success: true, filePath });
-  } catch (error) {
-
-    return NextResponse.json(
-      { error: 'Failed to save heavy data' + error },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const sessionId = searchParams.get('sessionId');
-
-  if (!sessionId) {
-    return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-  }
-
-  try {
-    const dataDir = path.join(process.cwd(), 'data', sessionId);
-    const filePath = path.join(dataDir, 'heavyData.json');
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ error: 'No heavyData found' }, { status: 404 });
-    }
-
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
-  } catch (error) {
-    console.error('Error reading heavy data:', error);
-    return NextResponse.json({ error: 'Heavy data not found' }, { status: 404 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\submission-history\route.tsx
-----------------------------------------
-// app/api/submission-history/route.ts
-
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const cik = searchParams.get("cik") ?? ""
-
-    const remoteUrl = `${BASE_URL}/submission_history?cik=${cik}&api_token=${API_TOKEN}`
-    const response = await fetch(remoteUrl, { method: "GET" })
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/submission-history route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app/api\test\route.tsx
-----------------------------------------
-// app/api/test/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT * FROM files ORDER BY file_id;');
-    client.release();
-
-    return NextResponse.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching data', error);
-    return NextResponse.json({ error: 'Error fetching data' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/api\uploads\route.tsx
-----------------------------------------
-// app/api/uploads/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-export async function GET(request: Request) {
-  const userId = request.headers.get('x-user-id');
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  try {
-    const client = await pool.connect();
-    // 1) Fetch all uploads for this user:
-    const uploadsResult = await client.query(`
-      SELECT upload_id, upload_name, created_at
-      FROM uploads
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-    `, [userId]);
-
-    const uploads = uploadsResult.rows;
-    client.release();
-    return NextResponse.json({ uploads });
-  } catch (error) {
-    console.error('Error fetching uploads:', error);
-    return NextResponse.json({ error: 'Error fetching uploads' }, { status: 500 });
-  }
-}
-
-export async function POST(request: Request) {
-  let client;
-  try {
-    client = await pool.connect();
-    const body = await request.json();
-    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
-
-    // 1) Validate user ID from headers
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // 2) Validate required fields
-    if (!uploadName) {
-      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
-    }
-
-    // 3) Create a new "upload" row
-    const insertUploadRes = await client.query(
-      `INSERT INTO uploads (user_id, upload_name)
-       VALUES ($1, $2)
-       RETURNING upload_id`,
-      [userId, uploadName]
-    );
-    const newUploadId = insertUploadRes.rows[0].upload_id;
-
-    // 4) Gather all files from the fileTree
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // base64 string from the frontend
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) {
-          traverseTree(node.children);
-        }
-      }
-    }
-    traverseTree(fileTree || []);
-
-    // 5) Insert each file row + extraction if applicable
-    for (const file of filesToInsert) {
-      const fileDataBuffer = file.fileDataBase64
-        ? Buffer.from(file.fileDataBase64, 'base64')
-        : null;
-
-      // Insert a row in "files"
-      const insertFileRes = await client.query(
-        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING file_id`,
-        [
-          newUploadId,
-          file.fileName,
-          file.fullPath,
-          file.mimeType,
-          fileDataBuffer,
-          false
-        ]
-      );
-
-      const fileId = insertFileRes.rows[0].file_id;
-
-      // If there's text or summary, insert into "extractions"
-      const extractedText = extractedTexts?.[file.fullPath];
-      const summary = summaries?.[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(
-          `UPDATE files SET is_extracted = TRUE WHERE file_id = $1`,
-          [fileId]
-        );
-
-        // Insert into "extractions"
-        await client.query(
-          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-           VALUES ($1, $2, $3)`,
-          [fileId, extractedText || null, summary || null]
-        );
-      }
-    }
-
-    client.release();
-
-    // Return the upload_id and chatHistory (if any)
-    return NextResponse.json(
-      { upload_id: newUploadId, chatHistory },
-      { status: 200 }
-    );
-  } catch (error) {
-    console.error('Error creating new upload:', error);
-    if (client) client.release();
-    return NextResponse.json(
-      { error: 'Error creating new upload' },
-      { status: 500 }
-    );
-  }
-}
-
-----------------------------------------
-
-File: app/api\uploads\[uploadId]\route.tsx
-----------------------------------------
-
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-
-export async function DELETE(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId,10);
-    if(isNaN(uploadId)) {
-      return NextResponse.json({ error:'Invalid upload ID'},{ status:400 });
-    }
-    //1) Find all files for this upload
-    const fileRes = await client.query(
-      'SELECT file_id FROM files WHERE upload_id=$1',[uploadId]
-    );
-    const fileIds = fileRes.rows.map(r=>r.file_id);
-    //2) Delete extractions for these files
-    if(fileIds.length>0) {
-      await client.query(
-        'DELETE FROM extractions WHERE file_id=ANY($1)',
-        [fileIds]
-      );
-    }
-    //3) Delete files themselves
-    await client.query('DELETE FROM files WHERE upload_id=$1',[uploadId]);
-    //4) Finally delete the upload
-    await client.query('DELETE FROM uploads WHERE upload_id=$1',[uploadId]);
-    client.release();
-    return NextResponse.json({ success:true },{ status:200 });
-  } catch(error) {
-    console.error('Error deleting entire upload:',error);
-    if(client) client.release();
-    return NextResponse.json({ error:'Error deleting upload'},{ status:500 });
-  }
-}
-
-
-export async function PATCH(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId, 10);
-    if (isNaN(uploadId)) {
-      return NextResponse.json({ error: 'Invalid upload ID' }, { status: 400 });
-    }
-
-    const body = await request.json();
-    const { fileTree, extractedTexts, summaries } = body;
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // from front end
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) traverseTree(node.children);
-      }
-    }
-    traverseTree(fileTree);
-
-    // For each file, either insert or update
-    for (const file of filesToInsert) {
-      const existingFileRes = await client.query(
-        `SELECT file_id FROM files WHERE upload_id = $1 AND file_path = $2`,
-        [uploadId, file.fullPath]
-      );
-      let fileId: number;
-      if (existingFileRes.rowCount && existingFileRes.rowCount > 0) {
-        fileId = existingFileRes.rows[0].file_id;
-        // Potentially update file_data if new base64 data is provided
-        if (file.fileDataBase64) {
-          const fileDataBuffer = Buffer.from(file.fileDataBase64, 'base64');
-          await client.query(
-            `UPDATE files
-                SET file_data = $2, mime_type=$3
-              WHERE file_id = $1`,
-            [fileId, fileDataBuffer, file.mimeType]
-          );
-        }
-      } else {
-        // Insert new file row
-        const fileDataBuffer = file.fileDataBase64
-          ? Buffer.from(file.fileDataBase64, 'base64')
-          : null;
-        const insertRes = await client.query(
-          `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING file_id`,
-          [
-            uploadId,
-            file.fileName,
-            file.fullPath,
-            file.mimeType,
-            fileDataBuffer,
-            false
-          ]
-        );
-        fileId = insertRes.rows[0].file_id;
-      }
-
-      // Check if we have extraction for that path
-      const extractedText = extractedTexts[file.fullPath];
-      const summary = summaries[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id = $1`, [fileId]);
-        // Upsert extraction
-        const existingExtractRes = await client.query(
-          `SELECT extraction_id FROM extractions WHERE file_id=$1`,
-          [fileId]
-        );
-        if (existingExtractRes.rowCount && existingExtractRes.rowCount > 0) {
-          await client.query(
-            `UPDATE extractions
-                SET extracted_text=$2,
-                    summarized_text=$3,
-                    updated_at=NOW()
-              WHERE file_id=$1`,
-            [fileId, extractedText || null, summary || null]
-          );
-        } else {
-          await client.query(
-            `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-             VALUES ($1,$2,$3)`,
-            [fileId, extractedText || null, summary || null]
-          );
-        }
-      }
-    }
-
-    client.release();
-    return NextResponse.json({ success: true, message: 'Upload updated.' });
-  } catch (error) {
-    console.error('Error updating upload:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error updating upload' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app/login\page.tsx
-----------------------------------------
-// app/login/page.tsx
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { useEffect, useState } from 'react';
 
-export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
+export default function AlphyAnimation() {
+  const [letters, setLetters] = useState<string[]>([]);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (!email || !password) {
-      setError('Please enter both email and password');
-      return;
-    }
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Login failed');
-      }
-      // Save login details from the response
-      localStorage.setItem('loggedIn', 'true');
-      localStorage.setItem('userEmail', data.user.email);
-      localStorage.setItem('userId', String(data.user.user_id));
-      router.push('/dashboard');
-    } catch (err) {
-      console.error('Login Error:', err);
-      setError('Invalid email or password');
-    }
+  useEffect(() => {
+    // Split the word "Alphy" into individual letters
+    const word = 'Alphy'.split('');
+
+    // Animate each letter with a delay
+    word.forEach((letter, index) => {
+      setTimeout(() => {
+        setLetters((prevLetters) => [...prevLetters, letter]);
+      }, index * 150); // Reduced delay for faster animation
+    });
+  }, []);
+
+  return (
+        <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-purple-500">
+          {letters.map((letter, index) => (
+            <span
+              key={index}
+              className="inline-block animate-bounce-in"
+              style={{ animationDelay: `${index * 0.15}s` }}
+            >
+              {letter}
+            </span>
+          ))}
+        </h1>
+  );
+}
+----------------------------------------
+
+File: components\AnalysisPreview.tsx
+----------------------------------------
+// components/AnalysisPreview.tsx
+'use client';
+
+import { motion } from 'framer-motion';
+
+const bars = [
+  { height: 2*40, delay: 0.2 },
+  { height: 2*60, delay: 0.4 },
+  { height: 2*30, delay: 0.6 },
+  { height: 2*80, delay: 0.8 },
+  { height: 2*50, delay: 1.0 },
+];
+
+export default function AnalysisPreview() {
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="relative w-full h-full"
+    >
+      {/* Floating Graph Animation */}
+      <div className="absolute inset-0 flex items-end justify-center gap-2">
+        {bars.map((bar, index) => (
+          <motion.div
+            key={index}
+            initial={{ height: 0 }}
+            animate={{ height: bar.height }}
+            transition={{
+              duration: 1.5,
+              repeat: Infinity,
+              repeatType: 'reverse',
+              delay: bar.delay,
+              ease: "easeInOut",
+            }}
+            className="w-8 bg-blue-400 rounded-t-lg shadow-lg"
+          />
+        ))}
+      </div>
+
+      {/* Floating Data Points */}
+      <motion.div 
+        className="absolute top-4 left-4 flex gap-2"
+        animate={{ y: [-5, 5, -5] }}
+        transition={{ duration: 4, repeat: Infinity }}
+      >
+        <div className="w-2 h-2 bg-green-400 rounded-full" />
+        <div className="w-2 h-2 bg-yellow-400 rounded-full" />
+        <div className="w-2 h-2 bg-red-400 rounded-full" />
+      </motion.div>
+
+    
+    </motion.div>
+  );
+}
+----------------------------------------
+
+File: components\ChatMessage.tsx
+----------------------------------------
+'use client';
+
+import React, { useState } from 'react';
+
+// 1. ReactMarkdown & plugins
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';       // GitHub-Flavored Markdown
+import remarkMath from 'remark-math';     // For math syntax $x^2$
+import rehypeKatex from 'rehype-katex';   // For rendering math
+import 'katex/dist/katex.min.css';        // KaTeX styles
+
+// 2. Optional Syntax Highlighting
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+//==========================
+// HELPER: parseAIResponse
+//==========================
+export const parseAIResponse = (content: string) => {
+  const thinkingEndIndex = content.indexOf('</think>');
+  if (thinkingEndIndex === -1) {
+    return { thinking: null, answer: content };
+  }
+
+  const thinkingStartIndex = content.indexOf('<think>');
+  const thinking = content.slice(thinkingStartIndex + 7, thinkingEndIndex);
+  const answer = content.slice(thinkingEndIndex + 8);
+
+  return { thinking, answer };
+};
+
+//==========================
+// MAIN COMPONENT
+//==========================
+interface ChatMessageProps {
+  role: string;
+  content: string;
+}
+
+export const ChatMessage: React.FC<ChatMessageProps> = ({ role, content }) => {
+  const [showThinking, setShowThinking] = useState(false);
+
+  // Extract the answer vs. hidden <think> text
+  const { thinking, answer } = parseAIResponse(content);
+
+  // Decide background colors, text colors, etc.
+  const isUser = role === 'user';
+  const containerClasses = isUser
+    ? 'bg-blue-50 border border-blue-200'
+    : 'bg-purple-50 border border-purple-200';
+
+  // Custom renderer for code blocks in Markdown
+  const markdownComponents = {
+    code({ inline, className, children, ...props }: { inline?: boolean, className?: string, children?: React.ReactNode }) {
+      const match = /language-(\w+)/.exec(className || '') || [];
+      return !inline ? (
+        <SyntaxHighlighter
+          language={match[1] || 'text'}
+          style={oneDark}
+          PreTag="div"
+          {...props}
+        >
+          {String(children).replace(/\n$/, '')}
+        </SyntaxHighlighter>
+      ) : (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    },
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
-          <h1 className="text-2xl font-bold text-center text-blue-600 mb-6">Welcome Back</h1>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">Email</label>
-              <input
-                type="email"
-                className="w-full border border-gray-300 rounded-md p-2"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                placeholder="Enter your email"
-              />
+    <div className={`p-4 rounded-lg mb-2 ${containerClasses}`}>
+      <div className="flex items-start gap-2">
+        <span className={`text-sm font-medium ${isUser ? 'text-blue-600' : 'text-purple-600'}`}>
+          {isUser ? 'You:' : 'AI:'}
+        </span>
+
+        <div className="flex-1 text-gray-700">
+          {/* ANSWER as Markdown */}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+            components={markdownComponents}
+          >
+            {answer}
+          </ReactMarkdown>
+
+          {thinking && (
+            <div className="mt-2">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              >
+                {showThinking ? 'Hide' : 'Show'} Reasoning
+                <svg
+                  className={`w-4 h-4 transition-transform ${showThinking ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {showThinking && (
+                <div className="mt-2 p-3 bg-gray-100 rounded-lg text-sm text-gray-600">
+                  {/* THINKING as Markdown (optional) */}
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={markdownComponents}
+                  >
+                    {thinking}
+                  </ReactMarkdown>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">Password</label>
-              <input
-                type="password"
-                className="w-full border border-gray-300 rounded-md p-2"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                placeholder="Enter your password"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors"
-            >
-              Log In
-            </button>
-          </form>
-          <div className="mt-4 text-center text-sm text-gray-600">
-            Don&apos;t have an account?{' '}
-            <Link href="/signup" className="text-blue-600 hover:underline">
-              Sign Up
-            </Link>
-          </div>
+          )}
         </div>
-      </main>
+      </div>
+    </div>
+  );
+};
+
+----------------------------------------
+
+File: components\CompanyInfoComponent.tsx
+----------------------------------------
+'use client';
+import { CompanyInfo } from '@/app/types';
+import React, { useEffect, useState } from 'react';
+
+// Type guard for company data validation
+function isCompanyArray(data: any): data is CompanyInfo[] {
+  return Array.isArray(data) && data.every(item => 
+    typeof item.name === 'string' &&
+    (typeof item.sector === 'string' || item.sector === undefined) &&
+    (typeof item.years === 'undefined' || Array.isArray(item.years)) &&
+    (typeof item.profits === 'undefined' || typeof item.profits === 'object') &&
+    (typeof item.assets === 'undefined' || typeof item.assets === 'object')
+  );
+}
+
+export const CompanyInfoComponent = ({ companies }: { companies: any }) => {
+  const [error, setError] = useState<string | null>(null);
+  const [validatedCompanies, setValidatedCompanies] = useState<CompanyInfo[]>([]);
+
+  useEffect(() => {
+    if (!companies) {
+      setError('No company data provided');
+      setValidatedCompanies([]);
+      return;
+    }
+
+    if (!isCompanyArray(companies)) {
+      setError('Invalid company data format');
+      setValidatedCompanies([]);
+      return;
+    }
+
+    setError(null);
+    setValidatedCompanies(companies);
+  }, [companies]);
+
+  if (error) {
+    return (
+      <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
+        <h3 className="text-red-600 font-medium">Data Error</h3>
+        <p className="text-red-500 text-sm">{error}</p>
+      </div>
+    );
+  }
+
+  if (validatedCompanies.length === 0) return null;
+
+  return (
+    <div className="mt-8 border-t pt-6">
+      <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+        <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
+          Company Data
+        </span>
+        Extracted Information
+      </h4>
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden text-gray-800">
+        {validatedCompanies.map((company, index) => (
+          <div key={index} className="p-4 border-b last:border-b-0">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h3 className="font-medium text-gray-900">{company.name}</h3>
+                {company.sector && <p className="text-sm text-gray-600">{company.sector}</p>}
+              </div>
+              {company.years && company.years.length > 0 && (
+                <div className="col-span-2">
+                  <div className="grid grid-cols-4 gap-4 text-sm">
+                    <div className="font-medium">Year</div>
+                    <div className="font-medium">Profits</div>
+                    <div className="font-medium">Assets</div>
+                    <div className="font-medium"> EBITDA </div>
+                    {company.years.map((year, yearIndex) => (
+                      <React.Fragment key={yearIndex}>
+                        <div className="text-gray-600">{year}</div>
+                        <div className="text-gray-600">
+                          {company.profits?.[year] || 'N/A'}
+                        </div>
+                        <div className="text-gray-600">
+                          {company.assets?.[year] || 'N/A'}
+                        </div>
+                        <div className="text-gray-600">
+                          {company.ebitda?.[year] || 'N/A'}
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+----------------------------------------
+
+File: components\CompanySearch.tsx
+----------------------------------------
+import { useEffect, useState } from 'react';
+
+interface Company {
+  cik: string;
+  name: string;
+  tickers: string[];
+}
+
+export default function CompanySearch() {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch both datasets in parallel
+        const [namesRes, tickersRes] = await Promise.all([
+          fetch('https://03ac-194-214-160-21.ngrok-free.app/cik_names?api_token=t3stt%40ken'),
+          fetch('https://03ac-194-214-160-21.ngrok-free.app/cik_tickers?api_token=t3stt%40ken')
+        ]);
+
+        const namesData: Record<string, string> = await namesRes.json();
+        const tickersData: Record<string, string[]> = await tickersRes.json();
+
+        // Merge the datasets
+        const mergedCompanies = Object.entries(tickersData).map(([cikWithZeros, tickers]) => {
+          // Remove leading zeros from CIK
+          const cik = parseInt(cikWithZeros, 10).toString();
+          return {
+            cik,
+            name: namesData[cik] || 'Unknown Company',
+            tickers
+          };
+        });
+
+        setCompanies(mergedCompanies);
+        setLoading(false);
+      } catch {
+        setError('Failed to load company data');
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  const filteredCompanies = companies.filter(company => {
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      company.name.toLowerCase().includes(searchLower) ||
+      company.tickers.some(ticker => ticker.toLowerCase().includes(searchLower)) ||
+      company.cik.includes(searchTerm)
+    );
+  });
+
+  if (loading) return <div className="p-4 text-gray-500">Loading company data...</div>;
+  if (error) return <div className="p-4 text-red-500">{error}</div>;
+
+  return (
+    <div className="max-w-2xl mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Company Search</h1>
+      
+      <input
+        type="text"
+        placeholder="Search by company name, ticker, or CIK..."
+        className="w-full p-2 border rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+      />
+
+      <div className="space-y-2">
+        {filteredCompanies.slice(0, 10).map(company => (
+          <div
+            key={company.cik}
+            className="p-4 border rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="font-semibold">{company.name}</h3>
+                <p className="text-gray-600 text-sm">CIK: {company.cik}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {company.tickers.map(ticker => (
+                  <span
+                    key={ticker}
+                    className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
+                  >
+                    {ticker}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {filteredCompanies.length === 0 && searchTerm && (
+        <div className="text-gray-500 text-center py-4">
+          No companies found matching `{searchTerm}`
+        </div>
+      )}
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\ExtractedTextComponent.tsx
+----------------------------------------
+'use client';
+
+import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';       // for GitHub-Flavored Markdown
+import remarkMath from 'remark-math';     // for LaTeX math
+import rehypeKatex from 'rehype-katex';   // to render LaTeX using KaTeX
+import 'katex/dist/katex.min.css';        // KaTeX CSS
+
+// Optional: If you want code syntax highlighting, you could import:
+// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+// import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+interface ExtractedTextProps {
+  content: string;
+}
+
+export const ExtractedTextContent: React.FC<ExtractedTextProps> = ({ content }) => {
+  // If you also want custom rendering for code blocks, you can define components like so:
+  /*
+  const markdownComponents = {
+    code({ node, inline, className, children, ...props }) {
+      const match = /language-(\w+)/.exec(className || '') || [];
+      return !inline ? (
+        <SyntaxHighlighter
+          language={match[1] || 'text'}
+          style={oneDark}
+          PreTag="div"
+          {...props}
+        >
+          {String(children).replace(/\n$/, '')}
+        </SyntaxHighlighter>
+      ) : (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    },
+  };
+  */
+
+  return (
+    <div className="prose max-w-none text-gray-800">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        // components={markdownComponents} // only if you want code highlighting
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+};
+
+----------------------------------------
+
+File: components\FileTree.tsx
+----------------------------------------
+'use client';
+
+import { useState } from 'react';
+import { FolderIcon, FolderOpenIcon, DocumentIcon } from '@heroicons/react/24/outline';
+
+export interface FileNode {
+  name: string;
+  type: 'file' | 'folder';
+  children?: FileNode[];
+  content?: string;
+  rawData?: ArrayBuffer;
+  fullPath?: string;
+  highlighted?: boolean;
+  selected?: boolean;
+  base64Data?: string;
+  mimeType?: string;
+  localPath?: string;
+}
+
+interface FileTreeProps {
+  nodes: FileNode[];
+  selectedFile?: FileNode | null;
+  onSelect: (node: FileNode) => void;
+  onToggleConversion?: (path: string) => void;
+  onToggleHighlight?: (path: string) => void;
+}
+
+interface TreeNodeProps {
+  node: FileNode;
+  onSelect: (node: FileNode) => void;
+  isSelected: boolean;
+  selectedFile?: FileNode | null;
+  onToggleConversion?: (path: string) => void;
+  onToggleHighlight?: (path: string) => void;
+}
+
+export default function FileTree({
+  nodes,
+  onSelect,
+  selectedFile,
+  onToggleConversion,
+  onToggleHighlight,
+}: FileTreeProps) {
+  return (
+    <div className="pl-4">
+      {nodes.map((node, index) => (
+        <TreeNode
+          key={index}
+          node={node}
+          onSelect={onSelect}
+          isSelected={selectedFile?.name === node.name}
+          selectedFile={selectedFile}
+          onToggleConversion={onToggleConversion}
+          onToggleHighlight={onToggleHighlight}
+        />
+      ))}
     </div>
   );
 }
 
+function TreeNode({
+  node,
+  onSelect,
+  isSelected,
+  selectedFile,
+  onToggleConversion,
+  onToggleHighlight,
+}: TreeNodeProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const handleClick = () => {
+    if (node.type === 'file') {
+      onSelect(node);
+    } else {
+      setIsOpen(!isOpen);
+    }
+  };
+
+  const handleDoubleClick = () => {
+    // If it's a file and we have a highlight function, call it
+    if (node.type === 'file' && onToggleHighlight) {
+      onToggleHighlight(node.fullPath!);
+    }
+  };
+
+  return (
+    <div className="pl-4">
+      <div className="flex items-center gap-2">
+        {/* Conversion Checkbox: only for files */}
+        {node.type === 'file' && (
+         <input
+         type="checkbox"
+         checked={node.selected ?? true} // Default to true
+         onChange={(e) => {
+           e.stopPropagation();
+           onToggleConversion?.(node.fullPath!);
+         }}
+         className="w-4 h-4 accent-blue-600 cursor-pointer"
+       />
+        )}
+
+        <button
+          onClick={handleClick}
+          onDoubleClick={handleDoubleClick}
+          className={`flex items-center gap-2 py-2 w-full text-left rounded-md px-2 transition-colors ${
+            node.highlighted ? 'ring-2 ring-blue-500 bg-blue-50 shadow-md' : ''
+          } ${
+            isSelected ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50'
+          }
+          ${node.selected ? '' : 'opacity-50 grayscale'}`
+          }
+        >
+          {/*{!node.selected && (
+              <span className="text-xs text-gray-500 ml-2">(Excluded from analysis)</span>
+            )} */}
+
+          {/* Exclude from analysis, if not selected, and if its not a folder */}
+          {!node.selected && node.type === 'file' && (
+            <span className="text-xs text-gray-500 ml-2">Excluded from analysis</span>
+          )}
+
+          {/* File/Folder Icon */} 
+
+          <span className="w-5 h-5 flex-shrink-0">
+            {node.type === 'folder' ? (
+              isOpen ? (
+                <FolderOpenIcon className="w-5 h-5 text-blue-600" />
+              ) : (
+                <FolderIcon className="w-5 h-5 text-blue-600" />
+              )
+            ) : (
+              <DocumentIcon className="w-5 h-5 text-gray-500" />
+            )}
+          </span>
+
+          {/* File/Folder Name */}
+          <span
+            className={`text-sm ${
+              node.type === 'folder' ? 'font-medium text-gray-900' : 'text-gray-700'
+            }`}
+          >
+            {node.name}
+          </span>
+        </button>
+      </div>
+
+      {/* Render child nodes if folder is open */}
+      {isOpen && node.children && (
+        <div className="pl-4 border-l-2 border-gray-200 ml-3">
+          <FileTree
+            nodes={node.children}
+            onSelect={onSelect}
+            selectedFile={selectedFile}
+            onToggleConversion={onToggleConversion}
+            onToggleHighlight={onToggleHighlight}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: components\FileUploader.tsx
+----------------------------------------
+'use client';
+
+import { useCallback } from 'react';
+
+export default function FileUploader({
+  onUpload
+}: {
+  onUpload: (files: File[]) => void;
+}) {
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files || []);
+      if (files.length > 0) {
+        onUpload(files);
+      }
+    },
+    [onUpload]
+  );
+
+  return (
+    <div className="border-2 border-dashed border-gray-300 p-4 rounded-lg">
+      <input
+        type="file"
+        multiple
+        onChange={handleFileChange}
+        className="block w-full text-sm text-gray-500
+          file:mr-4 file:py-2 file:px-4
+          file:rounded-full file:border-0
+          file:text-sm file:font-semibold
+          file:bg-blue-50 file:text-blue-700
+          hover:file:bg-blue-100"
+      />
+      <p className="mt-2 text-sm text-gray-600">
+        Supported formats: PDF, Excel, Word
+      </p>
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\Footer.tsx
+----------------------------------------
+'use client';
+
+import Link from 'next/link';
+import { FaFacebook, FaTwitter, FaInstagram, FaLinkedin } from 'react-icons/fa';
+
+export default function Footer() {
+  return (
+    <footer className="bg-gray-100 text-gray-600">
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Main Footer Content */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center space-y-6 md:space-y-0">
+          {/* Company Info */}
+          <div className="flex flex-col space-y-2">
+            <p className="text-sm font-semibold">© 2023 AlphaGen SARSL. All rights reserved.</p>
+            <p className="text-xs">
+              Based in Luxembourg | License #12345
+            </p>
+          </div>
+
+          {/* Navigation Links */}
+          <nav className="flex flex-col space-y-2">
+            <h3 className="text-sm font-semibold mb-2">Quick Links</h3>
+            <Link href="/about" className="text-xs hover:text-gray-900 transition-colors">
+              About Us
+            </Link>
+            <Link href="/services" className="text-xs hover:text-gray-900 transition-colors">
+              Our Services
+            </Link>
+            <Link href="/contact" className="text-xs hover:text-gray-900 transition-colors">
+              Contact Us
+            </Link>
+            <Link href="/privacy-policy" className="text-xs hover:text-gray-900 transition-colors">
+              Privacy Policy
+            </Link>
+          </nav>
+
+          {/* Social Media Links */}
+          <div className="flex flex-col space-y-2">
+            <h3 className="text-sm font-semibold mb-2">Follow Us</h3>
+            <div className="flex space-x-4">
+              <a
+                href="https://facebook.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <FaFacebook size={20} />
+              </a>
+              <a
+                href="https://twitter.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <FaTwitter size={20} />
+              </a>
+              <a
+                href="https://instagram.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <FaInstagram size={20} />
+              </a>
+              <a
+                href="https://linkedin.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <FaLinkedin size={20} />
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Line */}
+        <div className="border-t border-gray-300 mt-6 pt-4 text-xs text-center">
+          <p>
+            Designed and built with ❤️ by{' '}
+            <a
+              href="https://yourcompany.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-gray-900 transition-colors"
+            >
+              AlphaGen
+            </a>
+          </p>
+        </div>
+      </div>
+    </footer>
+  );
+}
+----------------------------------------
+
+File: components\Navbar.tsx
+----------------------------------------
+'use client';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { UserCircleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
+import AlphyAnimation from '@/components/AlphyAnimation';
+
+export default function Navbar() {
+  const [sessionId, setSessionId] = useState<string | null>(null); // Initialize as null
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
+  const router = useRouter();
+
+  useEffect(() => {
+    // Client-side only code
+    if (typeof window !== 'undefined') {
+      const storedSessionId = localStorage.getItem('currentSessionId');
+      setSessionId(storedSessionId);
+
+      const isLogged = localStorage.getItem('loggedIn') === 'true';
+      setLoggedIn(isLogged);
+      if (isLogged) {
+        setUserEmail(localStorage.getItem('userEmail') || '');
+      } else {
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userId');
+      }
+    }
+  }, []); // Empty dependency array ensures this runs once on mount
+
+  const handleLogout = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('loggedIn');
+      localStorage.removeItem('userEmail');
+      localStorage.removeItem('userId');
+      localStorage.removeItem('currentSessionId'); // Clear session ID on logout
+    }
+    setLoggedIn(false);
+    router.push('/login');
+  };
+
+  return (
+    <nav className="bg-white shadow">
+      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <Link href="/">
+          <span className="text-gray-900 hover:text-blue-800 transition-colors font-bold text-xl">Alphy</span>
+        </Link>
+        <div className="flex items-center space-x-4">
+          {loggedIn ? (
+            <>
+              <Link href="/dashboard">
+                <span className="text-gray-700 hover:text-blue-600 transition-colors">Dashboard</span>
+              </Link>
+              <Link href="/history">
+                <span className="text-gray-700 hover:text-blue-600 transition-colors">History</span>
+              </Link>
+              <Link 
+                href={sessionId ? `/companies?sessionId=${sessionId}` : '/companies'}
+                className="text-gray-700 hover:text-gray-900"
+              >
+                Companies
+              </Link>
+              <Link href="/settings" title="Settings">
+                <Cog6ToothIcon className="w-8 h-8 text-blue-600 cursor-pointer" />
+              </Link>
+              <div className="flex items-center space-x-2">
+                <UserCircleIcon className="w-8 h-8 text-blue-600" />
+                <span className="text-gray-700">{userEmail}</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors"
+              >
+                Log Out
+              </button>
+            </>
+          ) : (
+            <Link href="/login">
+              <button className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors">
+                Log In
+              </button>
+            </Link>
+          )}
+        </div>
+      </div>
+    </nav>
+  );
+}
+----------------------------------------
+
+File: components\SummaryContent.tsx
+----------------------------------------
+'use client';
+
+import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';       
+
+
+// If you also want syntax highlighting for code blocks:
+// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+// import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+const parseAIResponse = (content: string) => {
+  const thinkingEndIndex = content.indexOf('</think>');
+  if (thinkingEndIndex === -1) {
+    return { thinking: null, answer: content.trim() };
+  }
+  const thinkingStartIndex = content.indexOf('<think>');
+  const thinking = content.slice(thinkingStartIndex + 7, thinkingEndIndex).trim();
+  const answer = content.slice(thinkingEndIndex + 8).trim();
+  return { thinking, answer };
+};
+
+interface SummaryContentProps {
+  content: string;
+}
+
+export const SummaryContent: React.FC<SummaryContentProps> = ({ content }) => {
+  const [showThinking, setShowThinking] = useState(false);
+  const { thinking, answer } = parseAIResponse(content);
+
+  // Optionally define custom renderers for code blocks, etc.
+  // const markdownComponents = {
+  //   code({ node, inline, className, children, ...props }) {
+  //     const match = /language-(\w+)/.exec(className || '') || [];
+  //     return !inline ? (
+  //       <SyntaxHighlighter
+  //         language={match[1] || 'text'}
+  //         style={oneDark}
+  //         PreTag="div"
+  //         {...props}
+  //       >
+  //         {String(children).replace(/\n$/, '')}
+  //       </SyntaxHighlighter>
+  //     ) : (
+  //       <code className={className} {...props}>
+  //         {children}
+  //       </code>
+  //     );
+  //   },
+  // };
+
+  return (
+    <div className="prose max-w-none text-gray-700">
+      {/* ANSWER as Markdown */}
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      
+        {answer}
+      </ReactMarkdown>
+
+      {thinking && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowThinking((prev) => !prev)}
+            className="text-sm text-green-600 hover:text-green-700 flex items-center gap-1"
+          >
+            {showThinking ? 'Hide' : 'Show'} Reasoning
+            <svg
+              className={`w-4 h-4 transition-transform ${showThinking ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {showThinking && (
+            <div className="mt-2 p-3 bg-green-100 rounded-lg text-sm text-green-700 justify-center">
+              {/* THINKING as Markdown */}
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {thinking}
+              </ReactMarkdown>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+----------------------------------------
+
+File: components\TestimonialsSlider.tsx
+----------------------------------------
+'use client';
+import React from 'react';
+import dynamic from 'next/dynamic';
+
+// Dynamically import react-slick so it only runs client-side
+const Slider = dynamic(() => import('react-slick'), { ssr: false });
+
+// Import the slick CSS in the client component
+import 'slick-carousel/slick/slick.css';
+import 'slick-carousel/slick/slick-theme.css';
+
+// Optional: custom arrow components
+function NextArrow({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="absolute right-4 bottom-4 z-10 bg-black/50 hover:bg-black/70 text-white
+                 p-3 rounded-full focus:outline-none transition"
+      aria-label="Next"
+    >
+      {/* Simple SVG Arrow */}
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        className="h-5 w-5 transform rotate-[-90deg]"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path fillRule="evenodd" d="M9.293 15.707a1 1 0 010-1.414L12.586 11H3a1 1 0 110-2h9.586L9.293 5.707a1 1 0 111.414-1.414l4.999 4.999a1 1 0 010 1.414l-4.999 4.999a1 1 0 01-1.414 0z" clipRule="evenodd" />
+      </svg>
+    </button>
+  );
+}
+
+function PrevArrow({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="absolute left-4 bottom-4 z-10 bg-black/50 hover:bg-black/70 text-white
+                 p-3 rounded-full focus:outline-none transition"
+      aria-label="Previous"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        className="h-5 w-5 transform rotate-90"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path fillRule="evenodd" d="M9.293 15.707a1 1 0 010-1.414L12.586 11H3a1 1 0 110-2h9.586L9.293 5.707a1 1 0 111.414-1.414l4.999 4.999a1 1 0 010 1.414l-4.999 4.999a1 1 0 01-1.414 0z" clipRule="evenodd" />
+      </svg>
+    </button>
+  );
+}
+
+export default function TestimonialsSlider() {
+  // Carousel settings
+  const settings = {
+    dots: true,
+    infinite: true,
+    speed: 600,
+    fade: false, // crossfade effect
+    slidesToShow: 1,
+    slidesToScroll: 1,
+    autoplay: true,
+    autoplaySpeed: 5000,
+    pauseOnHover: true,
+    // enable arrow buttons
+    arrows: true,
+    nextArrow: <NextArrow />,
+    prevArrow: <PrevArrow />,
+  };
+
+  // Example data for each testimonial
+  const testimonials = [
+    {
+      name: 'Sarah L.',
+      role: 'Investment Analyst',
+      quote: `This platform has completely transformed how we approach due diligence.
+              The AI insights are unparalleled!`,
+      image: '/images/testimonial-1.jpg', // replace with a real image path
+    },
+    {
+      name: 'James K.',
+      role: 'Portfolio Manager',
+      quote: `We’ve saved countless hours thanks to the automated document processing.
+              Highly recommend it!`,
+      image: '/images/testimonial-2.jpg',
+    },
+    {
+      name: 'Emily T.',
+      role: 'Managing Director',
+      quote: `The support team is amazing, and the platform is intuitive. 
+              It’s been a game-changer for our firm.`,
+      image: '/images/testimonial-3.jpg',
+    },
+  ];
+
+  return (
+    <Slider {...settings} className="relative">
+      {testimonials.map((item, idx) => (
+        <div
+          key={idx}
+          className="flex items-center justify-center min-h-[400px] md:min-h-[500px]
+                     bg-cover bg-center bg-no-repeat
+                     text-white relative"
+          style={{ backgroundImage: `url(${item.image})` }}
+        >
+          {/* Overlay */}
+          <div className="absolute inset-0 bg-black bg-opacity-20" />
+
+          {/* Content */}
+          <div className="relative z-10 max-w-2xl mx-4 p-6 
+                          rounded-lg animate-fadeInUp
+                          bg-black/50 md:bg-transparent 
+                          md:backdrop-blur-sm
+                          text-center md:text-left">
+            <blockquote className="italic text-lg md:text-xl mb-4">
+              &ldquo;{item.quote}&rdquo;
+            </blockquote>
+            <p className="font-semibold text-sm md:text-base">
+              — {item.name}, {item.role}
+            </p>
+          </div>
+        </div>
+
+      ))}
+    </Slider>
+  );
+}
+
+----------------------------------------
+
+File: components\dashboard\ChatSection.tsx
+----------------------------------------
+import React, { FormEvent, RefObject } from 'react';
+import { ChatMessage } from '@/components/ChatMessage';
+
+interface ChatSectionProps {
+  chatHistory: Array<{ role: string; content: string }>;
+  formRef: React.RefObject<HTMLFormElement | null>;
+  handleChatSubmit: (params: { e: React.FormEvent<HTMLFormElement>; selectedFileText: string; globalContext: string; model: string; }) => Promise<void>;
+  extractedTexts: Record<string, string>;
+  selectedFile?: { fullPath?: string } | null;
+  highlightedFiles: Set<string>;
+  chatMessage: string;
+  setChatMessage: (message: string) => void;
+  isChatLoading: boolean;
+  selectedModel: string;
+}
+
+const ChatSection: React.FC<ChatSectionProps> = ({
+  chatHistory,
+  formRef,
+  handleChatSubmit,
+  extractedTexts,
+  selectedFile,
+  highlightedFiles,
+  chatMessage,
+  setChatMessage,
+  isChatLoading,
+  selectedModel
+}) => {
+  return (
+    <div className="mt-8 border-t pt-6">
+      <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-900">
+        <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm mr-2">
+          Ask Me Anything
+        </span>
+        About This File
+      </h3>
+      <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
+        {chatHistory.map((msg, idx) => (
+          <ChatMessage key={idx} role={msg.role} content={msg.content} />
+        ))}
+      </div>
+      <form
+        ref={formRef}
+        onSubmit={(e) =>
+          handleChatSubmit({
+            e,
+            selectedFileText: extractedTexts[selectedFile?.fullPath || ''],
+            globalContext: Array.from(highlightedFiles)
+              .map((path) => extractedTexts[path])
+              .join('\n\n'),
+            model: selectedModel
+          })
+        }
+        className="flex gap-2 text-gray-600"
+      >
+        <textarea
+          value={chatMessage}
+          onChange={(e) => setChatMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              formRef.current?.requestSubmit();
+            }
+          }}
+          className="flex-1 p-2 border rounded-lg"
+          placeholder="Ask a question about this file..."
+          rows={2}
+          disabled={isChatLoading}
+        />
+        <button
+          type="submit"
+          className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+          disabled={isChatLoading}
+        >
+          {isChatLoading ? 'Sending...' : 'Ask'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default ChatSection;
+----------------------------------------
+
+File: components\dashboard\FileAnalysisProgress.tsx
+----------------------------------------
+import React from "react";
+
+type FileAnalysisButtonsProps = {
+  fileTree: any[];
+  summarizationModel: string;
+  infoRetrievalModel: string;
+  consolidationModel: string;
+  runSummarization: boolean;
+  runInfoRetrieval: boolean;
+  analyzeFiles: (params: {
+    runSummarization: boolean;
+    runInfoRetrieval: boolean;
+    summarizationModel: string;
+    infoRetrievalModel: string;
+  }) => void;
+  openSaveModal: () => void;
+  toggleAllFiles: (state: boolean) => void;
+  allSelected: boolean;
+  setAllSelected: (state: boolean) => void;
+  getAllFiles: (files: any[]) => any[];
+  isAnalyzing: boolean;
+  progress: number;
+  processingPhase: string;
+  processedFiles: number;
+  totalFiles: number;
+};
+
+const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
+  fileTree,
+  summarizationModel,
+  infoRetrievalModel,
+  consolidationModel,
+  runSummarization,
+  runInfoRetrieval,
+  analyzeFiles,
+  openSaveModal,
+  toggleAllFiles,
+  allSelected,
+  setAllSelected,
+  getAllFiles,
+  isAnalyzing,
+  progress,
+  processingPhase,
+  processedFiles,
+  totalFiles,
+}) => {
+  if (fileTree.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+        <button
+          onClick={() => analyzeFiles({
+            runSummarization,
+            runInfoRetrieval,
+            summarizationModel,
+            infoRetrievalModel
+          })} // Changed from () => analyzeFiles(...)
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+          disabled={isAnalyzing}
+        >
+          {isAnalyzing ? "Analyzing..." : "Analyze Files"}
+        </button>
+          <button
+            onClick={openSaveModal}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors"
+          >
+            Save Progress
+          </button>
+        </div>
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={() => {
+              toggleAllFiles(!allSelected);
+              setAllSelected(!allSelected);
+            }}
+            className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
+          >
+            {allSelected ? "Deselect All" : "Select All"}
+          </button>
+          <span className="text-sm text-gray-600">
+            {getAllFiles(fileTree).filter((f) => f.selected).length} files selected
+          </span>
+        </div>
+        {isAnalyzing && (
+          <div className="flex flex-col items-end space-y-2 ml-4">
+            <div className="w-64 bg-gray-200 rounded-full h-2.5">
+              <div
+                className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <span className="text-sm text-gray-600">
+              {processingPhase === "extracting" &&
+                `Converting files to text: ${processedFiles}/${totalFiles} (${progress}%)`}
+              {processingPhase === "summarizing" &&
+                `Summarizing files: ${processedFiles}/${totalFiles} (${progress}%)`}
+              {processingPhase === "extracting_companies" &&
+                `Extracting company data: ${processedFiles}/${totalFiles} (${progress}%)`}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default FileAnalysisButtons;
+
+----------------------------------------
+
+File: components\dashboard\FilePreviewSection.tsx
+----------------------------------------
+import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { Dispatch, SetStateAction, useState } from 'react';
+import { CompanyInfoComponent } from '@/components/CompanyInfoComponent';
+import { ExtractedTextContent } from '@/components/ExtractedTextComponent';
+import { SummaryContent } from '@/components/SummaryContent';
+
+interface FileType {
+  name: string;
+  fullPath?: string;
+  content?: string;
+  type: 'file' | 'folder';
+}
+
+interface SelectedFilePanelProps {
+  selectedFile: FileType;
+  extractedTexts: Record<string, string>;
+  extractedCompanies: Record<string, any[]>;
+  summaries: Record<string, string>;
+  showExtracted: boolean;
+  setShowExtracted: Dispatch<SetStateAction<boolean>>;
+  rawResponses: Record<string, { prompt: string; response: string }>;
+}
+
+const SelectedFilePanel = ({
+  selectedFile,
+  extractedTexts,
+  extractedCompanies,
+  summaries,
+  showExtracted,
+  setShowExtracted,
+  rawResponses
+}: SelectedFilePanelProps) => {
+  const fileKey = selectedFile.fullPath || '';
+  const [showRawResponse, setShowRawResponse] = useState(false);
+  const fullPath = selectedFile.fullPath || '';
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-gray-900">
+          {selectedFile.name}
+          <span className="text-sm text-gray-500 ml-2">
+            ({selectedFile.type === 'file' ? 'File' : 'Folder'})
+          </span>
+        </h3>
+        <div className="flex gap-2">
+        
+          {extractedCompanies[fullPath] && (
+            <button
+              onClick={() => setShowRawResponse(!showRawResponse)}
+              className="px-3 py-1 text-sm bg-gray-100 text-gray-800 rounded-md hover:bg-gray-200"
+            >
+              {showRawResponse ? 'Hide Raw' : 'Show Raw'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Always show file preview */}
+      <div className="mb-6 border rounded-md overflow-hidden">
+        {selectedFile.content && (
+          <iframe
+            src={selectedFile.content}
+            className="w-full h-96"
+            title="File Preview"
+          />
+        )}
+      </div>
+
+      {/* Raw response toggleable section */}
+      {showRawResponse && (
+        <div className="mt-4 p-4 bg-gray-50 rounded-md border border-gray-200">
+          <h4 className="text-sm font-medium mb-2 text-gray-700">Raw LLM Response</h4>
+          <pre className="text-xs whitespace-pre-wrap break-words text-gray-600">
+            {rawResponses[fullPath]?.response || 'No raw response available'}
+          </pre>
+        </div>
+      )}
+
+      {/* Extracted content sections */}
+     
+          {/* Extracted Text */}
+         
+          {showRawResponse && extractedTexts[fileKey] && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-gray-700">Extracted Text</h4>
+              </div>
+              <div className="border p-3 rounded bg-gray-50 text-sm text-gray-600">
+                <ExtractedTextContent content={extractedTexts[fileKey]} />
+              </div>
+            </div>
+          )}
+         
+
+          {/* Extracted Companies */}
+          {/*
+          {extractedCompanies[fileKey]?.length > 0 && (
+            <div className="mt-6 border-t pt-6">
+              <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
+                  Companies
+                </span>
+                Extracted Entities
+              </h4>
+              <CompanyInfoComponent companies={extractedCompanies[fileKey]} />
+            </div>
+            
+          )}
+          */}
+
+          {/* Summaries */}
+          {summaries[fileKey] && (
+            <div className="mt-6 border-t pt-6">
+              <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm mr-2">
+                  AI Summary
+                </span>
+                Key Insights
+              </h4>
+              <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                <SummaryContent content={summaries[fileKey]} />
+                <div className="mt-4 flex items-center text-sm text-green-700">
+                  <InformationCircleIcon className="w-4 h-4 mr-1" />
+                  Summary generated by AI - verify against original documents
+                </div>
+              </div>
+            </div>
+          )}
+       
+    </div>
+  );
+};
+
+export default SelectedFilePanel;
+----------------------------------------
+
+File: components\dashboard\FileUploadArea.tsx
+----------------------------------------
+import { useDropzone } from 'react-dropzone';
+
+export default function FileUploadArea({
+  processZip,
+  processFolder,
+  handleLoadClick,
+  isDragActive
+}: {
+  processZip: (file: File) => Promise<void>;
+  processFolder: (files: FileList) => Promise<void>;
+  handleLoadClick: () => void;
+  isDragActive: boolean;
+}) {
+  const { getRootProps, getInputProps } = useDropzone({
+    onDrop: (acceptedFiles) => {
+      const zipFile = acceptedFiles.find((file) => file.name.endsWith('.zip'));
+      if (zipFile) processZip(zipFile);
+    },
+    accept: { 'application/zip': ['.zip'] },
+    multiple: false
+  });
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+      <div
+        {...getRootProps()}
+        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer ${
+          isDragActive ? 'border-blue-600 bg-blue-50' : 'border-gray-300'
+        }`}
+      >
+        <input {...getInputProps()} />
+        <p className="text-gray-600">
+          {isDragActive ? 'Drop ZIP file here' : 'Drag and drop a ZIP file or click to select'}
+        </p>
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+        <div className="flex gap-2">
+          <input
+            type="file"
+            id="folder-upload"
+            ref={(input) => {
+              if (input) input.webkitdirectory = true;
+            }}
+            onChange={(e) => e.target.files && processFolder(e.target.files)}
+            className="hidden"
+          />
+          <button
+            onClick={() => document.getElementById('folder-upload')?.click()}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+          >
+            Upload Folder
+          </button>
+          <button
+            onClick={handleLoadClick}
+            className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
+          >
+            Load Progress
+          </button>
+        </div>
+        <small className="text-gray-500">
+          Your browser may show a brief warning when uploading a folder. This is normal.
+        </small>
+      </div>
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\dashboard\LoadSessionModal.tsx
+----------------------------------------
+import React from 'react';
+
+interface SessionSummary {
+  session_id: number;
+  session_name: string;
+  created_at: string;
+}
+
+interface LoadModalProps {
+  showLoadModal: boolean;
+  availableSessions: SessionSummary[];
+  confirmLoadSession: (sessionId: string) => void;
+  setShowLoadModal: (show: boolean) => void;
+}
+
+const LoadModal: React.FC<LoadModalProps> = ({
+  showLoadModal,
+  availableSessions,
+  confirmLoadSession,
+  setShowLoadModal
+}) => {
+  if (!showLoadModal) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+      <div className="bg-white p-6 rounded-lg max-w-md w-full">
+        <h3 className="text-xl font-bold mb-4 text-gray-800">Select Session</h3>
+        {availableSessions.map(session => (
+          <div 
+            key={session.session_id}
+            className="p-3 hover:bg-gray-100 cursor-pointer text-gray-600"
+            onClick={() => confirmLoadSession(session.session_id.toString())}
+          >
+            <p>{session.session_name}</p>
+            <small>{new Date(session.created_at).toLocaleDateString()}</small>
+          </div>
+        ))}
+        <button onClick={() => setShowLoadModal(false)} className="mt-4 text-gray-800">
+          Go Back
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default LoadModal;
+----------------------------------------
+
+File: components\dashboard\ModelSelector.tsx
+----------------------------------------
+import { useState } from 'react';
+
+export default function ModelSelector({
+  selectedModel,
+  onModelChange,
+  disabled
+}: {
+  selectedModel: string;
+  onModelChange: (model: string) => void;
+  disabled?: boolean;
+}) {
+  const models = [
+    'deepseek:deepseek-reasoner',
+    'deepseek:deepseek-chat',
+  ]
+  return (
+    <select
+      value={selectedModel}
+      onChange={(e) => onModelChange(e.target.value)}
+      disabled={disabled}
+      className={`w-full p-2 border rounded ${disabled ? 'bg-gray-100' : ''}`}
+    >
+      {models.map((model) => (
+        <option key={model} value={model}>
+          {model.split(':')[1]}
+        </option>
+      ))}
+    </select>
+  )
+}
+----------------------------------------
+
+File: components\dashboard\RadioButtons.tsx
+----------------------------------------
+import React, { useState } from 'react';
+import { FileNode } from '@/components/FileTree';
+
+interface ChatContextRadioButtonsProps {
+    fileTree: FileNode[];
+    getAllFiles: (files: FileNode[]) => FileNode[];
+  }
+
+const ChatContextRadioButtons: React.FC<ChatContextRadioButtonsProps> = ({ fileTree, getAllFiles }) => {
+  const [contextType, setContextType] = useState<'none' | 'local' | 'global'>('none');
+
+  return (
+    <div className="mb-4 flex items-center gap-4">
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+          <input
+            type="radio"
+            checked={contextType === 'none'}
+            onChange={() => setContextType('none')}
+            className="w-4 h-4"
+          />
+          <span className="flex items-center gap-1">
+            No Context
+            <span className="text-gray-500 text-xs">(Question only)</span>
+          </span>
+        </label>
+        <label className="flex items-center gap-1 text-sm font-medium text-gray-700">
+          <input
+            type="radio"
+            checked={contextType === 'local'}
+            onChange={() => setContextType('local')}
+            className="w-4 h-4"
+          />
+          <span className="flex items-center gap-1">
+            Local Context
+            <span className="text-gray-500 text-xs">(Current file only)</span>
+          </span>
+        </label>
+        <label className="flex items-center gap-1 text-sm font-medium text-gray-700 ml-4">
+          <input
+            type="radio"
+            checked={contextType === 'global'}
+            onChange={() => setContextType('global')}
+            className="w-4 h-4"
+          />
+          <span className="flex items-center gap-1">
+            Global Context
+            <span className="text-gray-500 text-xs">
+              ({getAllFiles(fileTree).filter((f) => f.selected).length} files selected)
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+};
+
+export default ChatContextRadioButtons;
+
+----------------------------------------
+
+File: components\dashboard\SaveSessionModal.tsx
+----------------------------------------
+import React from 'react';
+
+interface SaveModalProps {
+  showSaveModal: boolean;
+  newUploadName: string;
+  setNewUploadName: (name: string) => void;
+  closeSaveModal: () => void;
+  handleSaveConfirm: () => void;
+}
+
+const SaveModal: React.FC<SaveModalProps> = ({
+  showSaveModal,
+  newUploadName,
+  setNewUploadName,
+  closeSaveModal,
+  handleSaveConfirm
+}) => {
+  if (!showSaveModal) return null;
+
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800">Save Session</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Session Name:
+            </label>
+            <input
+              type="text"
+              className="border border-gray-300 rounded w-full p-2 text-gray-800"
+              value={newUploadName}
+              onChange={(e) => setNewUploadName(e.target.value)}
+              placeholder="Enter a session name..."
+            />
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end space-x-2">
+          <button
+            onClick={closeSaveModal}
+            className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSaveConfirm}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          >
+            Save Session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SaveModal;
+----------------------------------------
+
+File: components\dashboard\SessionNameModal.tsx
+----------------------------------------
+// components/dashboard/SessionNameModal.tsx
+import { useState } from 'react';
+
+export default function SessionNameModal({
+  show,
+  onConfirm,
+  onCancel,
+}: {
+  show: boolean;
+  onConfirm: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState('');
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+      <div className="bg-white p-6 rounded-lg max-w-md w-full">
+        <h2 className="text-xl font-semibold mb-4 text-gray-600">Name Your Analysis Session</h2>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full p-2 border rounded mb-4"
+          placeholder="Session name"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(name)}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Start Analysis
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\ui\card.tsx
+----------------------------------------
+// components/ui/card.tsx
+"use client"
+
+import * as React from "react"
+
+// If you have a utility for merging class names, e.g. `clsx` or a custom `cn` helper, use it here.
+// Otherwise, here's a quick fallback:
+function cn(...classes: (string | undefined)[]) {
+  return classes.filter(Boolean).join(" ")
+}
+
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+// A generic Card container.
+export const Card = React.forwardRef<HTMLDivElement, CardProps>(
+  ({ className, children, ...props }, ref) => {
+    return (
+      <div
+        ref={ref}
+        className={cn(
+          "rounded-lg border bg-white text-black shadow-sm", 
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </div>
+    )
+  }
+)
+Card.displayName = "Card"
+
+interface CardHeaderProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function CardHeader({ className, ...props }: CardHeaderProps) {
+  return (
+    <div
+      className={cn("border-b p-4", className)}
+      {...props}
+    />
+  )
+}
+
+interface CardTitleProps extends React.HTMLAttributes<HTMLHeadingElement> {}
+
+export function CardTitle({ className, ...props }: CardTitleProps) {
+  return (
+    <h3
+      className={cn("font-semibold leading-none tracking-tight", className)}
+      {...props}
+    />
+  )
+}
+
+interface CardContentProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function CardContent({ className, ...props }: CardContentProps) {
+  return (
+    <div
+      className={cn("p-4", className)}
+      {...props}
+    />
+  )
+}
+
+----------------------------------------
+
+File: components\ui\command.tsx
+----------------------------------------
+"use client"
+
+import * as React from "react"
+import { Command as CommandPrimitive } from "cmdk"
+import clsx from "clsx"
+
+interface CommandProps extends React.ComponentPropsWithoutRef<typeof CommandPrimitive> {
+  className?: string
+}
+
+/**
+ * Main Command root container with some basic styling:
+ * - White background
+ * - Border
+ * - Rounded corners
+ * - Shadow
+ */
+const Root = React.forwardRef<HTMLDivElement, CommandProps>(
+  ({ className, ...props }, ref) => (
+    <CommandPrimitive
+      ref={ref}
+      className={clsx(
+        "relative w-full max-w-md rounded border bg-white shadow-sm", 
+        "focus-within:shadow-md transition-shadow",
+        className
+      )}
+      {...props}
+    />
+  )
+)
+Root.displayName = "Command"
+
+/**
+ * Command Input
+ * - Simple text input with a bottom border
+ * - Padding, text styles
+ */
+const Input = React.forwardRef<
+  HTMLInputElement,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Input
+    ref={ref}
+    className={clsx(
+      "w-full border-b p-2 outline-none text-sm placeholder:text-gray-400",
+      "focus:outline-none",
+      className
+    )}
+    {...props}
+  />
+))
+Input.displayName = "CommandInput"
+
+/**
+ * Command List
+ * - The container for your command items.
+ */
+const List = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.List
+    ref={ref}
+    className={clsx("max-h-60 overflow-auto", className)}
+    {...props}
+  />
+))
+List.displayName = "CommandList"
+
+/**
+ * Command Empty
+ * - Displayed when there are no matching items
+ */
+const Empty = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Empty
+    ref={ref}
+    className={clsx(
+      "p-4 text-sm text-gray-500 text-center",
+      className
+    )}
+    {...props}
+  />
+))
+Empty.displayName = "CommandEmpty"
+
+/**
+ * Command Group
+ * - Groups command items under a heading
+ */
+const Group = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Group
+    ref={ref}
+    className={clsx("p-2", className)}
+    {...props}
+  />
+))
+Group.displayName = "CommandGroup"
+
+/**
+ * Command Item
+ * - Each clickable row in the command list
+ */
+const Item = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
+>(({ className, children, ...props }, ref) => (
+  <CommandPrimitive.Item
+    ref={ref}
+    className={clsx(
+      "flex w-full cursor-pointer select-none items-center rounded p-2 text-sm",
+      "text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition-colors",
+      className
+    )}
+    {...props}
+  >
+    {children}
+  </CommandPrimitive.Item>
+))
+Item.displayName = "CommandItem"
+
+/**
+ * Export them in the same named format your code expects:
+ */
+export {
+  Root as Command,
+  Input as CommandInput,
+  List as CommandList,
+  Empty as CommandEmpty,
+  Group as CommandGroup,
+  Item as CommandItem,
+}
+
+----------------------------------------
+
+File: components\ui\company-facts-page.tsx
+----------------------------------------
+// components/ui/company-facts-page.tsx
+"use client";
+
+import React, { useState } from "react";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const Chart = dynamic(() => import("react-apexcharts"), { ssr: false });
+
+// Adjust these if you have environment variables:
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN || "t3stt%40ken";
+
+interface CompanyFacts {
+  cik: number;
+  entityName: string;
+  facts: Record<string, Record<string, { units: Record<string, Array<{ end: string; val: number }>> }>>;
+}
+
+interface CompanyFactsPageProps {
+  cik: string; // "0000320193" or similar
+}
+
+interface GeneralInfo {
+  cik: string;
+  ein: string;
+  addresses: {
+    business: {
+      city: string;
+      stateOrCountry: string;
+      street1: string;
+      street2: string | null;
+      zipCode: string;
+    };
+    mailing: {
+      city: string;
+      stateOrCountry: string;
+      street1: string;
+      street2: string | null;
+      zipCode: string;
+    };
+  };
+  category: string;
+  entityType: string;
+  exchanges: string[];
+  // There's also a huge "filings" object, but we skip it for brevity.
+}
+
+
+export function CompanyFactsPage({ cik }: CompanyFactsPageProps) {
+
+  const [companyFacts, setCompanyFacts] = useState<CompanyFacts | null>(null);
+  const [generalInfo, setGeneralInfo] = useState<GeneralInfo | null>(null);
+
+  const [loading, setLoading] = useState(false);
+  console.log("loading", loading);
+  const [loadingFacts] = useState(false);
+  // console log the setLoadingFacts
+  const [loadingInfo, setLoadingInfo] = useState(false);
+  const [selectedFactPath, setSelectedFactPath] = useState("");
+  const [timeSeriesData, setTimeSeriesData] = useState<Array<{ x: string; y: number }>>([]);
+
+  // Convert "0000320193" -> 320193
+  const numericCik = parseInt(cik, 10);
+
+  async function handleRetrieveFacts() {
+    setLoading(true);
+    setCompanyFacts(null);
+    setTimeSeriesData([]);
+    setSelectedFactPath("");
+
+    try {
+      //const url = `${BASE_URL}/company_facts?cik=${numericCik}&api_token=${API_TOKEN}`;
+      const url = `/api/company-facts?cik=${numericCik}&api_token=${API_TOKEN}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Error fetching facts: ${res.statusText}`);
+      }
+      const data = await res.json();
+      setCompanyFacts(data);
+    } catch (error) {
+      console.error("Failed to retrieve facts:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+    // Flatten available fact keys from the returned JSON
+    function getAvailableFactKeys(): string[] {
+      if (!companyFacts?.facts) return [];
+      const keys: string[] = [];
+      for (const [domain, factGroup] of Object.entries(companyFacts.facts)) {
+        for (const factName of Object.keys(factGroup)) {
+          keys.push(`${domain}/${factName}`);
+        }
+      }
+      return keys.sort();
+    }
+
+    function handleSelectFact(path: string) {
+      setSelectedFactPath(path);
+      if (!companyFacts?.facts) return;
+  
+      // Split "dei/EntityCommonStockSharesOutstanding"
+      const [domain, factName] = path.split("/");
+      const factObj = companyFacts.facts[domain]?.[factName];
+      if (!factObj?.units) {
+        setTimeSeriesData([]);
+        return;
+      }
+  
+      // pick the first unit key or "shares"
+      const unitKeys = Object.keys(factObj.units);
+      if (unitKeys.length === 0) {
+        setTimeSeriesData([]);
+        return;
+      }
+      const firstUnitKey = unitKeys[0];
+      const dataPoints = factObj.units[firstUnitKey] as Array<{
+        end: string;
+        val: number;
+      }>;
+  
+      const chartData = dataPoints.map((dp) => ({
+        x: dp.end,
+        y: dp.val,
+      }));
+      // sort by date
+      chartData.sort((a, b) => (a.x < b.x ? -1 : 1));
+      setTimeSeriesData(chartData);
+    }
+
+
+    // -----------------------------------------
+  // FETCH #2: General Info (submission_history)
+  // -----------------------------------------
+  async function handleRetrieveGeneralInfo() {
+    setLoadingInfo(true);
+    setGeneralInfo(null);
+
+    try {
+      const url = `/api/submission-history?cik=${numericCik}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Error fetching general info: ${res.statusText}`);
+      }
+      const data = await res.json();
+      setGeneralInfo(data);
+    } catch (error) {
+      console.error(error);
+      alert("Error retrieving general info. Check console for details.");
+    } finally {
+      setLoadingInfo(false);
+    }
+  }
+
+  
+
+  return (
+    <div className="p-4 bg-white rounded shadow space-y-6 text-gray-800">
+      <h2 className="text-lg font-bold">
+        CIK (raw): {cik} &mdash; (numeric: {numericCik})
+      </h2>
+
+      {/* Buttons */}
+      <div className="flex gap-4">
+        {/* Retrieve All Company Facts */}
+        {!companyFacts && !loadingFacts && (
+          <button
+            onClick={handleRetrieveFacts}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            Retrieve all Company Facts
+          </button>
+        )}
+        {loadingFacts && <Skeleton className="h-4 w-[200px]" />}
+
+        {/* Retrieve General Info */}
+        {!generalInfo && !loadingInfo && (
+          <button
+            onClick={handleRetrieveGeneralInfo}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          >
+            Retrieve General Info
+          </button>
+        )}
+        {loadingInfo && <Skeleton className="h-4 w-[200px]" />}
+      </div>
+
+      {/* General Info Display */}
+      {generalInfo && (
+        <div className="border p-4 rounded">
+          <h3 className="font-semibold mb-2">General Info</h3>
+          <p>
+            <strong>CIK:</strong> {generalInfo.cik}
+          </p>
+          <p>
+            <strong>EIN:</strong> {generalInfo.ein}
+          </p>
+          <p>
+            <strong>Category:</strong> {generalInfo.category}
+          </p>
+          <p>
+            <strong>Entity Type:</strong> {generalInfo.entityType}
+          </p>
+          <p>
+            <strong>Exchanges:</strong> {generalInfo.exchanges.join(", ")}
+          </p>
+          <div className="mt-2">
+            <strong>Business Address:</strong>
+            <p>
+              {generalInfo.addresses.business.street1}{" "}
+              {generalInfo.addresses.business.street2} <br />
+              {generalInfo.addresses.business.city},{" "}
+              {generalInfo.addresses.business.stateOrCountry},{" "}
+              {generalInfo.addresses.business.zipCode}
+            </p>
+          </div>
+          <div className="mt-2">
+            <strong>Mailing Address:</strong>
+            <p>
+              {generalInfo.addresses.mailing.street1}{" "}
+              {generalInfo.addresses.mailing.street2} <br />
+              {generalInfo.addresses.mailing.city},{" "}
+              {generalInfo.addresses.mailing.stateOrCountry},{" "}
+              {generalInfo.addresses.mailing.zipCode}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Company Facts + Chart */}
+      {companyFacts && (
+        <div className="border p-4 rounded space-y-4">
+          <p className="text-gray-600">
+            <strong>Entity Name:</strong> {companyFacts.entityName}
+          </p>
+
+          {/* Fact selector */}
+          <div>
+            <label className="block mb-1 mt-4 font-medium text-sm">
+              Select a Fact to Plot:
+            </label>
+            <select
+              className="border rounded px-2 py-1 text-sm"
+              value={selectedFactPath}
+              onChange={(e) => handleSelectFact(e.target.value)}
+            >
+              <option value="">-- Choose --</option>
+              {getAvailableFactKeys().map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Chart for the chosen fact */}
+          {selectedFactPath && timeSeriesData.length > 0 && (
+            <div className="mt-4">
+              <h4 className="font-semibold mb-2 text-gray-700">
+                Chart for: {selectedFactPath}
+              </h4>
+              <Chart
+                type="line"
+                height={300}
+                series={[
+                  {
+                    name: selectedFactPath,
+                    data: timeSeriesData,
+                  },
+                ]}
+                options={{
+                  chart: {
+                    id: "factsChart",
+                    toolbar: { show: false },
+                  },
+                  xaxis: {
+                    type: "datetime",
+                  },
+                }}
+              />
+            </div>
+          )}
+
+          {selectedFactPath && timeSeriesData.length === 0 && (
+            <p className="text-red-500 mt-2">
+              No time-series data found for this fact.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: components\ui\input.tsx
+----------------------------------------
+export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+    return (
+      <input
+        className={`border border-gray-300 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${className}`}
+        {...props}
+      />
+    );
+  }
+----------------------------------------
+
+File: components\ui\search-form.tsx
+----------------------------------------
+"use client";
+
+import React, { useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+
+interface SearchFormProps {
+  // You can adapt the shape as needed in your handleSearch logic
+  onSearch: (params: {
+    name: string;
+    ticker: string;
+    cik: string;
+  }) => Promise<void>;
+}
+
+export function SearchForm({ onSearch }: SearchFormProps) {
+  const [name, setName] = useState("");
+  const [ticker, setTicker] = useState("");
+  const [cik, setCik] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    console.log("Form submitted"); // <-- Debug log
+    setLoading(true);
+    try {
+      await onSearch({ name, ticker, cik });
+    } catch (error) {
+      console.error("Search error:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="space-y-4 bg-white p-4 rounded shadow-sm"
+    >
+      {/* Name Field */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          Name
+        </label>
+        <input
+          type="text"
+          placeholder="e.g. Apple Inc"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mt-1 block w-full border-gray-300 rounded-md
+                     shadow-sm focus:border-blue-500 focus:ring-blue-500
+                     text-sm px-3 py-2 text-gray-900"
+        />
+      </div>
+
+      {/* Ticker Field */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          Ticker
+        </label>
+        <input
+          type="text"
+          placeholder="e.g. AAPL"
+          value={ticker}
+          onChange={(e) => setTicker(e.target.value)}
+          className="mt-1 block w-full border-gray-300 rounded-md
+                     shadow-sm focus:border-blue-500 focus:ring-blue-500
+                     text-sm px-3 py-2 text-gray-900"
+        />
+      </div>
+
+      {/* CIK Field */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          CIK
+        </label>
+        <input
+          type="text"
+          placeholder="e.g. 0000320193"
+          value={cik}
+          onChange={(e) => setCik(e.target.value)}
+          className="mt-1 block w-full border-gray-300 rounded-md
+                     shadow-sm focus:border-blue-500 focus:ring-blue-500
+                     text-sm px-3 py-2"
+        />
+      </div>
+
+      {/* Search Button */}
+      <div className="text-right">
+        <button
+          type="submit"
+          className="inline-flex items-center px-4 py-2
+                     bg-blue-600 text-white rounded
+                     hover:bg-blue-700 text-sm font-medium
+                     focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          Search
+        </button>
+      </div>
+
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="pt-2">
+          <Skeleton className="h-4 w-full" />
+        </div>
+      )}
+    </form>
+  );
+}
+
+----------------------------------------
+
+File: components\ui\search-input.tsx
+----------------------------------------
+// components/ui/search-input.tsx
+"use client";
+
+import { useState, useCallback, useEffect } from 'react';
+import React from 'react';
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command';
+import { debounce } from 'lodash';
+import { Skeleton } from '@/components/ui/skeleton';
+interface SearchInputProps {
+  onSearch: (company: { cik: string; searchTerm: string; name: string; tickers?: string[] }) => void;
+}
+
+export function SearchInput({ onSearch }: SearchInputProps) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<{ cik: string; searchTerm: string; name: string; tickers?: string[] }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchSuggestions = useCallback(async (searchQuery: string) => {
+    try {
+      const response = await fetch(`/api/search?query=${encodeURIComponent(searchQuery)}`);
+      const data = await response.json();
+      setSuggestions(data);
+    } catch (error) {
+      console.error('Error fetching suggestions:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const debouncedFetchSuggestions = useCallback((searchQuery: string) => {
+    debounce(() => fetchSuggestions(searchQuery), 300)();
+  }, [fetchSuggestions]);
+
+  useEffect(() => {
+    if (query.length > 0) {
+      debouncedFetchSuggestions(query);
+      setLoading(true);
+      fetchSuggestions(query);
+    } else {
+      setSuggestions([]);
+    }
+  }, [query, fetchSuggestions, debouncedFetchSuggestions]);
+
+  return (
+    <div className="w-full max-w-2xl mx-auto text-gray-600">
+      <Command shouldFilter={false}>
+        <CommandInput
+          placeholder="Search company by name, CIK, or ticker..."
+          value={query}
+          onValueChange={setQuery}
+        />
+        {loading && <div className="p-2"><Skeleton className="h-4 w-full" /></div>}
+        <CommandList>
+          {suggestions.length > 0 && (
+            <CommandGroup heading="Suggestions">
+              {suggestions.map((company) => (
+                <CommandItem
+                  key={company.cik}
+                  value={company.cik}
+                  onSelect={() => {
+                    setQuery(company.searchTerm);
+                    onSearch(company);
+                    setSuggestions([]);
+                  }}
+                  className="cursor-pointer"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium">{company.name}</span>
+                    <div className="flex gap-2 text-sm text-muted-foreground">
+                      {company.tickers?.map(t => <span key={t}>Ticker: {t}</span>)}
+                      <span>CIK: {company.cik.padStart(10, '0')}</span>
+                    </div>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {!loading && suggestions.length === 0 && query.length > 1 && (
+            <CommandEmpty>No results found.</CommandEmpty>
+          )}
+        </CommandList>
+      </Command>
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\ui\search-results.tsx
+----------------------------------------
+// components/ui/search-results.tsx
+"use client";
+import { useRouter } from "next/navigation";
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+
+interface Company {
+  cik: string;
+  name: string;
+  tickers?: string[];
+}
+
+interface SearchResultsProps {
+  results: Company[];
+}
+
+export function SearchResults({ results }: SearchResultsProps) {
+  const router = useRouter();
+  return (
+    <div className="grid gap-4 mt-8">
+      {results.map((company) => (
+        <Card key={company.cik} className="hover:shadow-lg transition-shadow">
+          <CardHeader>
+            <CardTitle className="text-xl">{company.name}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-4 text-muted-foreground">
+              <div>
+                <p className="text-sm">CIK: {company.cik.padStart(10, '0')}</p>
+                {(company.tickers?.length ?? 0) > 0 && (
+                  <p className="text-sm">Tickers: {company.tickers?.join(', ')}</p>
+                )}
+                  <button
+              onClick={() => router.push(`/data/${company.cik}`)}
+              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+            >
+              View Facts
+            </button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+----------------------------------------
+
+File: components\ui\skeleton.tsx
+----------------------------------------
+// components/ui/skeleton.tsx
+
+import * as React from "react"
+import { cn } from "../../lib/utils" // or wherever your cn (classNames) helper is
+
+export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn(
+        "animate-pulse rounded-md bg-gray-200", 
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+----------------------------------------
+
+File: components\ui\spinner.tsx
+----------------------------------------
+export function Spinner({ className }: { className?: string }) {
+    return (
+      <svg
+        className={`animate-spin h-5 w-5 text-current ${className}`}
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+      >
+        <circle
+          className="opacity-25"
+          cx="12"
+          cy="12"
+          r="10"
+          stroke="currentColor"
+          strokeWidth="4"
+        ></circle>
+        <path
+          className="opacity-75"
+          fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+        ></path>
+      </svg>
+    );
+  }
 ----------------------------------------
 
