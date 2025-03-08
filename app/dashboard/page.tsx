@@ -220,7 +220,7 @@ export default function Dashboard() {
 
       // 3. Process chunks in parallel with error handling
       const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-      debugger;
+      //debugger;
       const chunkPromises = chunks.map(async (chunk) => {
         const chunkPrompt = getConsolidationPrompt(chunk);
         try {
@@ -562,8 +562,6 @@ export default function Dashboard() {
                         const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
                         const sessionId = await saveSession(sessionName);
                         
-                        // Trigger consolidation with the new session ID
-                        await handleConsolidateCompanies(sessionId);
                       } catch (error) {
                         console.error('Processing error:', error);
                         alert("Analysis failed: " + (error instanceof Error ? error.message : 'Unknown error'));
