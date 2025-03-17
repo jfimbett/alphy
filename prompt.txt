@@ -7,10 +7,33 @@ it extracts that information, and finally there is a consolidation step because 
 
 I need your help with the following things:
 
-1. The consolidation step is failing for some companies, probably because there is very little information to retrieve. 
-In those cases instead of throwing an error, I prefer to just being directed to the companies page but showing there a simple message like no company data retrieved. 
-2. The companies data after consolidation is not being stored correctly I believe in the databases. 
-3. I need a better wat to save/store sessions, because it looks weird now, I need one easier way to have a single session for the user and let it change the documents that he is analyzing. 
+1. Sometimes a call to the LLM fails, this could be for many reasons but I need to be able to see it in order to debug it. 
+for example I see this error some TestimonialsSlider
+Response JSON Parse Error: SyntaxError: Unexpected end of JSON input
+    at JSON.parse (<anonymous>)
+    at POST (file://C%3A/Users/jimbet/Documents/alphy/app/api/llm/route.tsx:94:26)
+  92 |         }
+  93 |
+> 94 |         const data = JSON.parse(responseText);
+     |                          ^
+  95 |
+  96 |         let content = '';
+  97 |
+ POST /api/llm 500 in 601093ms
+
+ In order to better understand, I need you to create a log file, store it in a folder in the root folder of the project, in which 
+ i can see all the conversation with the LLM and the application. Be explicit in showing me the model that is being used, the data that the user sends and the data that the LLM returns
+
+ 2. The companies page since the information that appears there is linked to a session, should also have the option 
+ for the user to choose a session right there. 
+
+ 3. Is it possible to relate session ids with the name that the user has put to the session? For now is just numbers that are +1 every time. 
+
+ 3. The history page does not have the option to load a session, just to look at it, there could be an option enxt to each session item. 
+
+ 4. I am not seeing the consolidated information being saved in the session, this can be because I first save it before consolidating, and then 
+ once its consolidated I am not sure it is being saved again. 
+
 
 Here is the file structure of the project
 
@@ -448,7 +471,7 @@ export default function Dashboard() {
       router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
-      alert(`Consolidation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      router.push(`/companies?sessionId=${sessionId}&message=noData`);
     } finally {
       setIsConsolidating(false);
     }
@@ -459,8 +482,11 @@ export default function Dashboard() {
   // ---------------------------
   useEffect(() => {
     const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    const currentSessionId = localStorage.getItem('currentSessionId');
     if (!userId) {
       router.push('/login');
+    }else if (currentSessionId) {
+      setCurrentSessionId(currentSessionId);
     }
   }, [router]);
 
@@ -528,7 +554,6 @@ export default function Dashboard() {
 
   async function saveSession(sessionName: string): Promise<string> {
     const fileTreeWithBase64 = addBase64ToTree(fileTree);
-
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: {
@@ -539,9 +564,7 @@ export default function Dashboard() {
     });
     if (!res.ok) throw new Error('Failed to save session');
     const data = await res.json();
-
     setCurrentSessionId(data.session_id);
-
     await saveHeavyData(data.session_id, {
         fileTree: fileTreeWithBase64,
         extractedTexts,
@@ -553,7 +576,7 @@ export default function Dashboard() {
     setCurrentSessionId(data.session_id);
 
     setSuccessMessage('Session saved successfully!');
-
+    localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
     return data.session_id;
   }
 
@@ -591,10 +614,6 @@ export default function Dashboard() {
         alert('No session data found.');
         return;
       }
-
-      setCurrentSessionId(sessionId);
-
-      // 2) Fetch heavy data
       const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
@@ -611,6 +630,7 @@ export default function Dashboard() {
       setSummaries(heavyData.summaries || {});
       localStorage.setItem('currentSessionId', sessionId);
       setCurrentSessionId(sessionId);
+      router.push(`/dashboard?sessionId=${sessionId}`); // Redirect to dashboard
     } catch (error) {
       console.error('Error loading session:', error);
       alert('Error loading session: ' + (error as Error).message);
@@ -1317,11 +1337,12 @@ export function useFileProcessing() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          heavyData,
+          heavyData: {
+            ...heavyData,
+            consolidatedCompanies: heavyData.consolidatedCompanies || [], // Ensure it's passed
+          },
         }),
       });
-      if (!res.ok) throw new Error('Failed to save heavy data');
-     
     } catch (error) {
       console.error(error);
       throw error;
@@ -1355,7 +1376,7 @@ export function useFileProcessing() {
 
 ----------------------------------------
 
-File: app/companies/page.tsx
+File: app\companies\page.tsx
 ----------------------------------------
 // app/companies/page.tsx
 'use client';
@@ -1388,7 +1409,6 @@ export default function CompaniesPage() {
   useEffect(() => {
     const fetchConsolidatedData = async () => {
       if (!sessionId) return;
-
       try {
         const response = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
         if (!response.ok) throw new Error('Failed to fetch data');
@@ -1408,6 +1428,17 @@ export default function CompaniesPage() {
 
     fetchConsolidatedData();
   }, [sessionId]);
+
+  // Add conditional rendering for the "no company data retrieved" message
+  if (searchParams.get('message') === 'noData') {
+    return (
+      <div className="min-h-screen bg-gray-50 text-gray-600">
+        <main className="max-w-7xl mx-auto px-4 py-8">
+          <p className="text-center text-gray-600">No company data retrieved.</p>
+        </main>
+      </div>
+    );
+  }
 
   const getCompanyYears = (company: ConsolidatedCompany): number[] => {
     const years = new Set<number>();
@@ -1436,7 +1467,6 @@ export default function CompaniesPage() {
 
     return (
       <div className="mb-8 text-gray-500">
-        <Navbar />
         <h2 className="text-xl font-bold mb-4" style={{ color }}>
           {type === 'fund' ? 'Funds' : 'Companies'}
         </h2>
@@ -1507,7 +1537,7 @@ export default function CompaniesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      
+      <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
         {renderCompanySection('fund', '#2563eb')}
         {renderCompanySection('company', '#16a34a')}
@@ -1515,6 +1545,463 @@ export default function CompaniesPage() {
     </div>
   );
 }
+----------------------------------------
+
+File: app\history\page.tsx
+----------------------------------------
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { TrashIcon } from '@heroicons/react/24/outline';
+import Navbar from '@/components/Navbar';
+
+export interface SessionSummary {
+  session_id: number;
+  session_name: string;
+  created_at: string;
+  file_count: number;
+}
+
+export default function HistoryPage() {
+  const router = useRouter();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // For custom "internal" delete confirmation
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null);
+
+  // Fetch user sessions on mount
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      // Not logged in
+      router.push('/login');
+      return;
+    }
+
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) {
+          setError(data.error);
+          return;
+        }
+        setSessions(data.sessions || []);
+      })
+      .catch((err) => {
+        setError(err.message || 'Error fetching sessions');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [router]);
+
+  // Delete a session
+
+  function handleOpenDeleteModal(session: SessionSummary) {
+    setSelectedSession(session);
+    setShowDeleteModal(true);
+  }
+
+  function handleCloseDeleteModal() {
+    setShowDeleteModal(false);
+    setSelectedSession(null);
+  }
+   // Actual deletion logic, only called upon modal confirmation
+   async function handleConfirmDelete() {
+    if (!selectedSession) return; // safety check
+
+    try {
+      const userId = localStorage.getItem('userId') || '';
+      const res = await fetch(`/api/sessions/${selectedSession.session_id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to delete session');
+      }
+
+      // Remove it from local state
+      setSessions((prev) =>
+        prev.filter((s) => s.session_id !== selectedSession.session_id)
+      );
+    } catch (err: unknown) {
+      console.error(err);
+      if (err instanceof Error) {
+        alert('Error deleting session: ' + err.message);
+      } else {
+        alert('Unknown error deleting session.');
+      }
+    } finally {
+      handleCloseDeleteModal();
+    }
+  }
+
+  if (loading) {
+    return <div className="p-4">Loading sessions...</div>;
+  }
+
+  if (error) {
+    return <div className="p-4 text-red-600">Error: {error}</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+    <Navbar />
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800">Your Sessions</h1>
+        {sessions.length === 0 ? (
+          <p>No sessions found.</p>
+        ) : (
+          <ul className="space-y-4">
+            {sessions.map((session) => (
+              <li
+                key={session.session_id}
+                className="border p-4 rounded bg-white flex justify-between"
+              >
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-600">
+                    {session.session_name}
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Created: {new Date(session.created_at).toLocaleString()}
+                  </p>
+                  {/* <p className="text-sm text-gray-600">Files: {session.file_count}</p> */}
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* View Details */}
+                  <button
+                    onClick={() => router.push(`/history/${session.session_id}`)}
+                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    View Details
+                  </button>
+
+                  {/* Delete Session (opens our custom modal) */}
+                  <button
+                    onClick={() => handleOpenDeleteModal(session)}
+                    className="p-2 hover:bg-red-50 rounded"
+                    title="Delete Session"
+                  >
+                    <TrashIcon className="w-5 h-5 text-red-600" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </main>
+
+      {/* Our custom modal for delete confirmation */}
+      {showDeleteModal && selectedSession && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <div className="bg-white p-6 rounded shadow-md max-w-sm w-full">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">
+              Delete Session
+            </h2>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete the session "<strong>{selectedSession.session_name}</strong>"?
+              <br />
+              This action is <strong>permanent</strong> and cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleCloseDeleteModal}
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+----------------------------------------
+
+File: app\history\[sessionId]\page.tsx
+----------------------------------------
+// app/history/[sessionId]/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import Footer from '@/components/Footer';
+import ReactJson from 'react-json-view';
+import * as XLSX from 'xlsx';
+import { FileNode } from '@/components/FileTree';
+
+// Define the structure of the session data stored in the database.
+export interface SessionData {
+  session_name: string;
+  fileTree?: FileNode[];
+  // You can add other properties (extractedTexts, summaries, chatHistory, etc.) here
+  [key: string]: unknown;
+}
+
+// Define the session structure returned by your API.
+export interface Session {
+  session_data: SessionData;
+  created_at: string;
+  file_count: number;
+}
+
+// A helper function to recursively extract Excel files from the file tree.
+const getExcelFiles = (nodes: FileNode[]): FileNode[] => {
+  let files: FileNode[] = [];
+  nodes.forEach((node) => {
+    if (node.type === 'file' && /\.(xlsx|xls)$/i.test(node.name)) {
+      files.push(node);
+    }
+    if (node.children && node.children.length > 0) {
+      files = files.concat(getExcelFiles(node.children));
+    }
+  });
+  return files;
+};
+
+// Component to preview an Excel file node.
+const ExcelPreview: React.FC<{ node: FileNode }> = ({ node }) => {
+  const [tableData, setTableData] = useState<string[][]>([]);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    const parseExcel = async () => {
+      if (!node.base64Data) {
+        setError('No data available');
+        return;
+      }
+      try {
+        // Decode the base64 string into a binary string.
+        const binaryStr = atob(node.base64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        // Parse the workbook using XLSX.
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        // Convert the sheet to an array-of-arrays (each row is an array).
+        const data: (string | number | boolean | null)[][] = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, { header: 1 });
+        const stringData: string[][] = data.map(row => row.map(cell => cell !== null ? cell.toString() : ''));
+        setTableData(stringData);
+      } catch {
+        setError('Error parsing Excel file');
+      }
+    };
+
+    parseExcel();
+  }, [node.base64Data]);
+
+  return (
+    <div className="mb-4">
+      <h3 className="font-semibold text-gray-800">{node.name}</h3>
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : tableData.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border border-gray-300">
+            <tbody>
+              {tableData.slice(0, 10).map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-b border-gray-200">
+                  {row.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className="px-2 py-1 border-r border-gray-200 text-gray-800"
+                    >
+                      {cell !== undefined ? cell.toString() : ''}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {tableData.length > 10 && (
+            <p className="text-sm text-gray-600 mt-2">Showing first 10 rows</p>
+          )}
+        </div>
+      ) : (
+        <p className="text-gray-800">No data to preview</p>
+      )}
+    </div>
+  );
+};
+
+const SessionDetail: React.FC = () => {
+  const { sessionId } = useParams();
+  const [session, setSession] = useState<Session | null>(null);
+  const [error, setError] = useState<string>('');
+
+// Add this useEffect to fetch heavy data when the component mounts
+useEffect(() => {
+
+  const userId = localStorage.getItem('userId');
+  if (!userId || !sessionId) return;
+
+  const fetchHeavyData = async () => {
+    try {
+      const res = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      if (!res.ok) throw new Error('Failed to fetch heavy data');
+      const heavyData = await res.json();
+      // Merge heavy data into session data
+      setSession(prev => prev ? {
+        ...prev,
+        session_data: {
+          ...prev.session_data,
+          extractedTexts: heavyData.extractedTexts,
+          summaries: heavyData.summaries,
+          rawResponses: heavyData.rawResponses
+        }
+      } : null);
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unknown error occurred');
+      }
+    }
+  };
+
+  async function fetchSession() {
+    try {
+      // 1) Minimal session info from the DB
+      const sessRes = await fetch(`/api/sessions/${sessionId}`, {
+        headers: { 'x-user-id': userId || '' },
+      });
+      if (!sessRes.ok) throw new Error('Failed to fetch session');
+      const sessJson = await sessRes.json();
+      // sessJson is { session: { session_id, session_name, created_at, ... } }
+
+      // 2) Heavy data from local file
+      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+      // If heavy data doesn’t exist, it might be 404. You can handle that gracefully.
+      if (!heavyRes.ok) {
+        console.warn('No heavy data found (maybe not uploaded yet).');
+      }
+      const heavyJson = heavyRes.ok ? await heavyRes.json() : {};
+
+      // 3) Merge them together
+      // Suppose your DB session JSON doesn't store `session_data` by default.
+      // You can create a structure that includes fileTree, chatHistory, etc.
+      setSession({
+        // For example, you can store them like:
+        session_data: {
+          session_name: sessJson.session.session_name,
+          fileTree: heavyJson.extractedTexts ? [] : [], // or reconstruct if you wish
+          // Or you can do more advanced merges if you have them
+          extractedTexts: heavyJson.extractedTexts || {},
+          summaries: heavyJson.summaries || {},
+        },
+        created_at: sessJson.session.created_at,
+        file_count: sessJson.session.file_count || 0,
+      });
+    } catch (err) {
+      console.error('Error fetching session details:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }
+
+  if (sessionId) {
+    fetchSession();
+    fetchHeavyData();
+  }
+}, [sessionId]);
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+     
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p className="text-red-600">{error}</p>
+        </main>
+   
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+    
+        <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+          <p>Loading session details...</p>
+        </main>
+     
+      </div>
+    );
+  }
+
+  // Extract Excel files (if any) from the file tree stored in session_data.
+  const excelFiles: FileNode[] = session.session_data.fileTree
+    ? getExcelFiles(session.session_data.fileTree)
+    : [];
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 py-8 flex-grow text-gray-800">
+        <h1 className="text-2xl font-bold mb-6">Session Details</h1>
+        <div className="mb-4">
+          <p>
+            <strong>Name:</strong>{' '}
+            {session.session_data.session_name || 'Untitled Session'}
+          </p>
+          <p>
+            <strong>Created:</strong>{' '}
+            {new Date(session.created_at).toLocaleString()}
+          </p>
+          <p>
+           {/* <strong>Files Count:</strong> {session.file_count}*/}
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-2">Session Data</h2>
+          {/* A scrollable, collapsible JSON viewer */}
+          <div className="max-h-96 overflow-y-auto bg-gray-100 p-4 rounded">
+            <ReactJson
+              src={session.session_data}
+              theme="rjv-default"
+              collapsed={2}
+              displayDataTypes={false}
+              style={{ fontSize: '0.875rem' }}
+            />
+          </div>
+        </div>
+
+        {excelFiles.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-2">Excel Files Preview</h2>
+            {excelFiles.map((file, index) => (
+              <ExcelPreview key={index} node={file} />
+            ))}
+          </div>
+        )}
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+export default SessionDetail;
+
 ----------------------------------------
 
 File: app\api\account-data\route.tsx
@@ -2393,6 +2880,9 @@ export async function POST(request: Request) {
 
     // 1) Create the directory structure: data/sessionId/files
     const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
     const filesDir = path.join(dataDir, 'files');
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -2446,16 +2936,9 @@ export async function POST(request: Request) {
     const finalHeavyData = {
       ...existingData,
       ...heavyData,
-      fileTree: updatedFileTree
+      consolidatedCompanies: heavyData.consolidatedCompanies || [],
     };
-
-    
     fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
-
-
-
-
-
     return NextResponse.json({ success: true, filePath });
   } catch (error) {
 
@@ -2844,104 +3327,6 @@ export async function PATCH(request: Request,{ params }: { params: { uploadId: s
   }
 }
 
-----------------------------------------
-
-File: components/CompanyInfoComponent.tsx
-----------------------------------------
-'use client';
-import { CompanyInfo } from '@/app/types';
-import React, { useEffect, useState } from 'react';
-
-// Type guard for company data validation
-function isCompanyArray(data: any): data is CompanyInfo[] {
-  return Array.isArray(data) && data.every(item => 
-    typeof item.name === 'string' &&
-    (typeof item.sector === 'string' || item.sector === undefined) &&
-    (typeof item.years === 'undefined' || Array.isArray(item.years)) &&
-    (typeof item.profits === 'undefined' || typeof item.profits === 'object') &&
-    (typeof item.assets === 'undefined' || typeof item.assets === 'object')
-  );
-}
-
-export const CompanyInfoComponent = ({ companies }: { companies: any }) => {
-  const [error, setError] = useState<string | null>(null);
-  const [validatedCompanies, setValidatedCompanies] = useState<CompanyInfo[]>([]);
-
-  useEffect(() => {
-    if (!companies) {
-      setError('No company data provided');
-      setValidatedCompanies([]);
-      return;
-    }
-
-    if (!isCompanyArray(companies)) {
-      setError('Invalid company data format');
-      setValidatedCompanies([]);
-      return;
-    }
-
-    setError(null);
-    setValidatedCompanies(companies);
-  }, [companies]);
-
-  if (error) {
-    return (
-      <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
-        <h3 className="text-red-600 font-medium">Data Error</h3>
-        <p className="text-red-500 text-sm">{error}</p>
-      </div>
-    );
-  }
-
-  if (validatedCompanies.length === 0) return null;
-
-  return (
-    <div className="mt-8 border-t pt-6">
-      <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-        <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2">
-          Company Data
-        </span>
-        Extracted Information
-      </h4>
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden text-gray-800">
-        {validatedCompanies.map((company, index) => (
-          <div key={index} className="p-4 border-b last:border-b-0">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h3 className="font-medium text-gray-900">{company.name}</h3>
-                {company.sector && <p className="text-sm text-gray-600">{company.sector}</p>}
-              </div>
-              {company.years && company.years.length > 0 && (
-                <div className="col-span-2">
-                  <div className="grid grid-cols-4 gap-4 text-sm">
-                    <div className="font-medium">Year</div>
-                    <div className="font-medium">Profits</div>
-                    <div className="font-medium">Assets</div>
-                    <div className="font-medium"> EBITDA </div>
-                    {company.years.map((year, yearIndex) => (
-                      <React.Fragment key={yearIndex}>
-                        <div className="text-gray-600">{year}</div>
-                        <div className="text-gray-600">
-                          {company.profits?.[year] || 'N/A'}
-                        </div>
-                        <div className="text-gray-600">
-                          {company.assets?.[year] || 'N/A'}
-                        </div>
-                        <div className="text-gray-600">
-                          {company.ebitda?.[year] || 'N/A'}
-                        </div>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
 ----------------------------------------
 
 

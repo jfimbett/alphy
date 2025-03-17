@@ -9,9 +9,9 @@ def main():
     entries = [
         'app/dashboard/page.tsx', 
         'app/dashboard/useFileProcessing.tsx',
-        'app/companies/page.tsx',
+        'app/companies',
+        'app/history',
         'app/api',
-        'components/CompanyInfoComponent.tsx'
     ]  
 
     # Path to the starting prompt file

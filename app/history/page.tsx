@@ -103,7 +103,7 @@ export default function HistoryPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-    
+    <Navbar />
       <main className="max-w-4xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-6 text-gray-800">Your Sessions</h1>
         {sessions.length === 0 ? (
@@ -131,6 +131,19 @@ export default function HistoryPage() {
                     className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                   >
                     View Details
+                  </button>
+
+                      {/* NEW "Load Session" button */}
+                  <button
+                    onClick={() => {
+                      // 1) store in local storage
+                      localStorage.setItem('currentSessionId', String(session.session_id));
+                      // 2) push to dashboard
+                      router.push(`/dashboard?sessionId=${session.session_id}`);
+                    }}
+                    className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700"
+                  >
+                    Load Session
                   </button>
 
                   {/* Delete Session (opens our custom modal) */}

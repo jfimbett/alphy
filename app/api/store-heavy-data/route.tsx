@@ -13,6 +13,9 @@ export async function POST(request: Request) {
 
     // 1) Create the directory structure: data/sessionId/files
     const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
     const filesDir = path.join(dataDir, 'files');
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -66,16 +69,9 @@ export async function POST(request: Request) {
     const finalHeavyData = {
       ...existingData,
       ...heavyData,
-      fileTree: updatedFileTree
+      consolidatedCompanies: heavyData.consolidatedCompanies || [],
     };
-
-    
     fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
-
-
-
-
-
     return NextResponse.json({ success: true, filePath });
   } catch (error) {
 

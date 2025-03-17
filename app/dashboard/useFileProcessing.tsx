@@ -458,11 +458,12 @@ export function useFileProcessing() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          heavyData,
+          heavyData: {
+            ...heavyData,
+            consolidatedCompanies: heavyData.consolidatedCompanies || [], // Ensure it's passed
+          },
         }),
       });
-      if (!res.ok) throw new Error('Failed to save heavy data');
-     
     } catch (error) {
       console.error(error);
       throw error;

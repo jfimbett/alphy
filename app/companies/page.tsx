@@ -4,6 +4,9 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+import { useRouter } from 'next/navigation';
+import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
+
 
 interface VariableData {
   value?: number | string;
@@ -20,18 +23,40 @@ interface ConsolidatedCompany {
 }
 
 export default function CompaniesPage() {
+  const router = useRouter();     // <-- ADD
   const searchParams = useSearchParams();
-  const sessionId = searchParams.get('sessionId');
+  const existingSessionId = searchParams.get('sessionId');
+  
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);   // <-- ADD
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
+ 
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) return; // Not logged in
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.sessions) {
+          setSessions(data.sessions);
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching sessions for Companies page:', err);
+      });
+  }, []);
 
   useEffect(() => {
     const fetchConsolidatedData = async () => {
-      if (!sessionId) return;
-
+      if (!existingSessionId) {
+        setLoading(false);
+        return;
+      }
       try {
-        const response = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+        const response = await fetch(`/api/store-heavy-data?sessionId=${existingSessionId}`);
         if (!response.ok) throw new Error('Failed to fetch data');
         const data = await response.json();
 
@@ -48,7 +73,18 @@ export default function CompaniesPage() {
     };
 
     fetchConsolidatedData();
-  }, [sessionId]);
+  }, [existingSessionId]);
+
+  // Add conditional rendering for the "no company data retrieved" message
+  if (searchParams.get('message') === 'noData') {
+    return (
+      <div className="min-h-screen bg-gray-50 text-gray-600">
+        <main className="max-w-7xl mx-auto px-4 py-8">
+          <p className="text-center text-gray-600">No company data retrieved.</p>
+        </main>
+      </div>
+    );
+  }
 
   const getCompanyYears = (company: ConsolidatedCompany): number[] => {
     const years = new Set<number>();
@@ -77,7 +113,6 @@ export default function CompaniesPage() {
 
     return (
       <div className="mb-8 text-gray-500">
-        <Navbar />
         <h2 className="text-xl font-bold mb-4" style={{ color }}>
           {type === 'fund' ? 'Funds' : 'Companies'}
         </h2>
@@ -148,8 +183,30 @@ export default function CompaniesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      
+      <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
+         {/* 
+         * Session Selector 
+         */}
+        <div className="mb-4 text-gray-500">
+          <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
+          <select
+            className="border p-2 rounded"
+            value={existingSessionId || ''} // empty if no session chosen
+            onChange={(e) => {
+              const newSessionId = e.target.value;
+              router.push(`/companies?sessionId=${newSessionId}`);
+            }}
+          >
+            <option value="">-- Choose a session --</option>
+            {sessions.map((s) => (
+              <option key={s.session_id} value={s.session_id}>
+                {s.session_name} (ID: {s.session_id})
+              </option>
+            ))}
+          </select>
+        </div>
+
         {renderCompanySection('fund', '#2563eb')}
         {renderCompanySection('company', '#16a34a')}
       </main>

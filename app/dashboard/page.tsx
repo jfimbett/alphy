@@ -321,7 +321,7 @@ export default function Dashboard() {
       router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
-      alert(`Consolidation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      router.push(`/companies?sessionId=${sessionId}&message=noData`);
     } finally {
       setIsConsolidating(false);
     }
@@ -332,8 +332,11 @@ export default function Dashboard() {
   // ---------------------------
   useEffect(() => {
     const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    const currentSessionId = localStorage.getItem('currentSessionId');
     if (!userId) {
       router.push('/login');
+    }else if (currentSessionId) {
+      setCurrentSessionId(currentSessionId);
     }
   }, [router]);
 
@@ -401,7 +404,6 @@ export default function Dashboard() {
 
   async function saveSession(sessionName: string): Promise<string> {
     const fileTreeWithBase64 = addBase64ToTree(fileTree);
-
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: {
@@ -412,9 +414,7 @@ export default function Dashboard() {
     });
     if (!res.ok) throw new Error('Failed to save session');
     const data = await res.json();
-
     setCurrentSessionId(data.session_id);
-
     await saveHeavyData(data.session_id, {
         fileTree: fileTreeWithBase64,
         extractedTexts,
@@ -426,7 +426,7 @@ export default function Dashboard() {
     setCurrentSessionId(data.session_id);
 
     setSuccessMessage('Session saved successfully!');
-
+    localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
     return data.session_id;
   }
 
@@ -464,10 +464,6 @@ export default function Dashboard() {
         alert('No session data found.');
         return;
       }
-
-      setCurrentSessionId(sessionId);
-
-      // 2) Fetch heavy data
       const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
@@ -484,6 +480,7 @@ export default function Dashboard() {
       setSummaries(heavyData.summaries || {});
       localStorage.setItem('currentSessionId', sessionId);
       setCurrentSessionId(sessionId);
+      router.push(`/dashboard?sessionId=${sessionId}`); // Redirect to dashboard
     } catch (error) {
       console.error('Error loading session:', error);
       alert('Error loading session: ' + (error as Error).message);

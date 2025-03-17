@@ -7,10 +7,33 @@ it extracts that information, and finally there is a consolidation step because 
 
 I need your help with the following things:
 
-1. The consolidation step is failing for some companies, probably because there is very little information to retrieve. 
-In those cases instead of throwing an error, I prefer to just being directed to the companies page but showing there a simple message like no company data retrieved. 
-2. The companies data after consolidation is not being stored correctly I believe in the databases. 
-3. I need a better wat to save/store sessions, because it looks weird now, I need one easier way to have a single session for the user and let it change the documents that he is analyzing. 
+1. Sometimes a call to the LLM fails, this could be for many reasons but I need to be able to see it in order to debug it. 
+for example I see this error some TestimonialsSlider
+Response JSON Parse Error: SyntaxError: Unexpected end of JSON input
+    at JSON.parse (<anonymous>)
+    at POST (file://C%3A/Users/jimbet/Documents/alphy/app/api/llm/route.tsx:94:26)
+  92 |         }
+  93 |
+> 94 |         const data = JSON.parse(responseText);
+     |                          ^
+  95 |
+  96 |         let content = '';
+  97 |
+ POST /api/llm 500 in 601093ms
+
+ In order to better understand, I need you to create a log file, store it in a folder in the root folder of the project, in which 
+ i can see all the conversation with the LLM and the application. Be explicit in showing me the model that is being used, the data that the user sends and the data that the LLM returns
+
+ 2. The companies page since the information that appears there is linked to a session, should also have the option 
+ for the user to choose a session right there. 
+
+ 3. Is it possible to relate session ids with the name that the user has put to the session? For now is just numbers that are +1 every time. 
+
+ 3. The history page does not have the option to load a session, just to look at it, there could be an option enxt to each session item. 
+
+ 4. I am not seeing the consolidated information being saved in the session, this can be because I first save it before consolidating, and then 
+ once its consolidated I am not sure it is being saved again. 
+
 
 Here is the file structure of the project
 

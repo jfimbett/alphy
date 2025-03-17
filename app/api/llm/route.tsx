@@ -1,6 +1,8 @@
-// app/api/llm/route.ts
-import { NextResponse } from 'next/server'
+// File: app/api/llm/route.tsx
+import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
+import fs from 'fs';
+import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,27 +14,92 @@ interface DeepSeekError {
   };
 }
 
-export async function POST(req: Request) {
-  const body = await req.json();
-  const { prompt, context, history, model, format, requestType } = body || {};
+// -------------
+// NEW HELPER: logLLMCall
+// -------------
+function logLLMCall({
+  prompt,
+  model,
+  requestType,
+  userId,
+  response,
+  error,
+}: {
+  prompt: string;
+  model: string;
+  requestType: string;
+  userId: string | null;
+  response?: string;
+  error?: string;
+}) {
+  try {
+    const logsDir = path.join(process.cwd(), 'logs'); 
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir);
+    }
+    const logFile = path.join(logsDir, 'llm-logs.txt');
 
-  if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: "Invalid prompt" }, { status: 300 });
+    const timestamp = new Date().toISOString();
+    let logEntry = `\n[${timestamp}] MODEL: ${model}, USER: ${userId ?? 'Unknown'}, REQUEST_TYPE: ${requestType}\n`;
+    logEntry += `Prompt:\n${prompt}\n`;
+
+    if (response) {
+      logEntry += `Response:\n${response}\n`;
+    }
+    if (error) {
+      logEntry += `Error:\n${error}\n`;
+    }
+    logEntry += '\n-----------------------------------------------------\n';
+
+    // Append sync or async are both valid. Sync is simpler but can block; 
+    // for small logs, it usually won't be an issue:
+    fs.appendFileSync(logFile, logEntry, 'utf8');
+  } catch (err) {
+    console.error('Failed to write LLM call log:', err);
+  }
+}
+
+export async function POST(req: Request) {
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch (error) {
+    // If the request body is invalid JSON, return 400
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
-  const userId = req.headers.get('x-user-id');
+  const { prompt, context, history, model, format, requestType } = body || {};
+  if (!prompt || typeof prompt !== 'string') {
+    return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
+  }
 
+  const userId = req.headers.get('x-user-id');
+  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
+  // -------------
+  // For local dev/test: Mock response quickly
+  // -------------
   if (DEVELOPMENT) {
+    // Log the call in dev mode anyway
+    logLLMCall({
+      prompt,
+      model: model || 'no-model',
+      requestType: requestType || 'unknown',
+      userId,
+      response: '[MOCKED] No actual LLM call made',
+    });
+
     await new Promise(res => setTimeout(res, 500));
     return NextResponse.json({
       content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
-      tokensUsed: 42
+      tokensUsed: 42,
     });
   }
 
+  // -------------
+  // Actual LLM call
+  // -------------
   try {
-    
     if (model?.startsWith('deepseek:')) {
       const deepseekKey = process.env.DEEPSEEK_API_KEY;
       if (!deepseekKey) {
@@ -47,7 +114,7 @@ export async function POST(req: Request) {
       const messages = [
         { role: 'system', content: context || 'You are a helpful assistant.' },
         ...(Array.isArray(history) ? history : []),
-        { role: 'user', content: prompt }
+        { role: 'user', content: prompt },
       ];
 
       const requestPayload = {
@@ -56,7 +123,8 @@ export async function POST(req: Request) {
         temperature: 0.0,
         max_tokens: 8000,
         stream: false,
-        //response_format: format === 'json' ? { type: 'json_object' } : undefined
+        // For "json" format, you'd generally let the system or user instructions 
+        // shape the output. (DeepSeek doesn't use `response_format` like OpenAI)
       };
 
       const startTime = Date.now();
@@ -64,21 +132,26 @@ export async function POST(req: Request) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${deepseekKey}`
+          Authorization: `Bearer ${deepseekKey}`,
         },
-        body: JSON.stringify(requestPayload)
+        body: JSON.stringify(requestPayload),
       });
-
       const responseTime = Date.now() - startTime;
       const responseText = await response.text();
-      
-      
 
       if (!response.ok) {
         console.error('DeepSeek API Error Details:', {
           status: response.status,
           headers: Object.fromEntries(response.headers.entries()),
-          body: responseText
+          body: responseText,
+        });
+        // Log the failed call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
         });
         return NextResponse.json(
           { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
@@ -86,69 +159,72 @@ export async function POST(req: Request) {
         );
       }
 
+      // Now attempt to parse the JSON
       try {
-        if (requestType === 'consolidation') {
-        console.log('Consolidation Response:', responseText);
-        }
-
         const data = JSON.parse(responseText);
-
         let content = '';
 
-        if (requestType === 'consolidation') {
-          const rawContent = data.choices[0].message.content;
-          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
-          
-          // Validate basic structure
-          if (!content.startsWith('[') || !content.endsWith(']')) {
-            console.error('Invalid consolidation structure:', content);
-            content = '[]'; // Return empty array as fallback
-          }
-        }
-
-        if (requestType === 'summarize') {
-          // For summaries, use the message content directly
-          content = data.choices[0].message.content;
-        } else if (requestType === 'consolidation' || requestType === 'extract') {
-           // For structured data, clean JSON formatting
-          const rawContent = data.choices[0].message.content;
+        if (requestType === 'consolidation' || requestType === 'extract') {
+          // For structured data
+          const rawContent = data.choices?.[0]?.message?.content || '';
           content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
         } else {
-          content = data.choices[0].message.content;
+          // Summaries, chat, etc.
+          content = data.choices?.[0]?.message?.content || '';
         }
 
+        // Log the successful call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          response: content,
+        });
+
         return NextResponse.json({
-          content: content,
-          tokensUsed: data.usage?.total_tokens || 0
+          content,
+          tokensUsed: data.usage?.total_tokens || 0,
+          responseTime,
         });
       } catch (parseError) {
-        if (requestType === 'summarize') {
-          return NextResponse.json({
-            content: responseText, // Return raw text if JSON parse fails
-            tokensUsed: 0
-          });
-        }
-        console.error('Response JSON Parse Error:', parseError);
+        // If parse fails, log the error but return the raw text
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `Response JSON Parse Error: ${String(parseError)}`,
+          response: responseText,
+        });
         return NextResponse.json(
-          { error: 'Failed to parse API response', response: responseText },
+          {
+            error: 'Failed to parse API response',
+            response: responseText,
+          },
           { status: 500 }
         );
       }
     }
 
-    if (model?.startsWith('openai:')) {
-      // commented for now
-    }
+    // If we eventually supported openai: or other, handle here...
+    return NextResponse.json({ error: 'Unsupported model provider' }, { status: 400 });
+  } catch (error: any) {
+    // Log any top-level error
+    logLLMCall({
+      prompt,
+      model: model || 'unknown',
+      requestType: requestType || 'unknown',
+      userId,
+      error: String(error),
+    });
 
-    return NextResponse.json(
-      { error: 'Unsupported model provider' },
-      { status: 400 }
-    );
-
-  } catch (error) {
     console.error('LLM Processing Error:', error);
     return NextResponse.json(
-      { error: 'LLM processing failed', details: error instanceof Error ? error.message : String(error) },
+      {
+        error: 'LLM processing failed',
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
