@@ -152,7 +152,7 @@ const [variableExtraction, setVariableExtraction] = useState(defaultVariableExtr
 
   return (
     <div className="min-h-screen bg-gray-50">
-     
+     <Navbar />
       <main className="max-w-2xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-6 text-gray-800">Settings</h1>
 

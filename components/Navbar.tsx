@@ -11,6 +11,25 @@ export default function Navbar() {
   const [userEmail, setUserEmail] = useState('');
   const router = useRouter();
 
+    // Authentication check function
+    const checkAuthState = () => {
+      if (typeof window === 'undefined') return;
+  
+      const storedSessionId = localStorage.getItem('currentSessionId');
+      const isLogged = localStorage.getItem('loggedIn') === 'true';
+      const email = localStorage.getItem('userEmail') || '';
+  
+      setSessionId(storedSessionId);
+      setLoggedIn(isLogged);
+      setUserEmail(email);
+  
+      if (!isLogged) {
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userId');
+      }
+    };
+    
+
   useEffect(() => {
     // Client-side only code
     if (typeof window !== 'undefined') {

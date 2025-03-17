@@ -77,6 +77,7 @@ export default function CompaniesPage() {
 
     return (
       <div className="mb-8 text-gray-500">
+        <Navbar />
         <h2 className="text-xl font-bold mb-4" style={{ color }}>
           {type === 'fund' ? 'Funds' : 'Companies'}
         </h2>

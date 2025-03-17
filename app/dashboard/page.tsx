@@ -27,6 +27,7 @@ import { InformationCircleIcon } from '@heroicons/react/24/outline';
 // Types
 import { SessionSummary } from '@/app/history/page';
 import { run } from 'node:test';
+import Navbar from '@/components/Navbar';
 
 // ---------------------------------------------------
 // Helper Functions (NEWLY ADDED)
@@ -44,29 +45,42 @@ const estimateTokens = (text: string): number => {
   return heuristicEstimate;
 };
 
-// Enhanced merge function with conflict resolution
 const mergeConsolidatedCompanies = (companiesArray: any[]) => {
   const companyMap = new Map<string, any>();
 
-  companiesArray.forEach((company) => {
-    const existing = companyMap.get(company.name);
+  companiesArray.flat().forEach((company) => {
+    if (!company?.name) return; // Skip invalid entries
 
+    const existing = companyMap.get(company.name);
+    const newCompany = deepClone(company);
+
+    // First occurrence
     if (!existing) {
-      companyMap.set(company.name, {
-        ...company,
-        variables: deepClone(company.variables),
-        dates: [...company.dates],
-      });
+      companyMap.set(company.name, newCompany);
       return;
     }
 
-    // Merge variables with priority to newer data
-    existing.variables = deepMerge(existing.variables, company.variables);
+    // Merge numerical values
+    Object.entries(newCompany.variables).forEach(([key, value]) => {
+      if (typeof value === 'number') {
+        existing.variables[key] = (existing.variables[key] || 0) + value;
+      } else if (value instanceof Date) {
+        existing.variables[key] = value > existing.variables[key] ? value : existing.variables[key];
+      } else {
+        existing.variables[key] = value || existing.variables[key];
+      }
+    });
 
-    // Deduplicate and sort dates
-    existing.dates = Array.from(new Set([...existing.dates, ...company.dates])).sort(
-      (a, b) => new Date(a).getTime() - new Date(b).getTime()
-    );
+    // Merge dates
+    existing.dates = Array.from(
+      new Set([...existing.dates, ...newCompany.dates])
+    ).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
+    // Merge other fields
+    existing.lastUpdated = [existing.lastUpdated, newCompany.lastUpdated]
+      .filter(Boolean)
+      .sort()
+      .pop();
   });
 
   return Array.from(companyMap.values());
@@ -170,60 +184,58 @@ export default function Dashboard() {
   // Consolidate Companies (UPDATED)
   // ---------------------------------------------------
   const handleConsolidateCompanies = async (sessionId: string) => {
-
     setIsConsolidating(true);
     try {
-      // 1. Calculate token capacity
+
       const MAX_TOKENS = 65536;
-      const SAFETY_MARGIN = 5000;
-      const systemMessage = 'You are a helpful assistant.'; // Use actual context if available
-      const basePrompt = getConsolidationPrompt([]); // Get template without data
-
-      // Estimate base tokens (system message + empty prompt)
-      const baseTokens = estimateTokens(systemMessage) + estimateTokens(basePrompt);
-      const availableTokens = MAX_TOKENS - baseTokens - SAFETY_MARGIN;
-
-      if (availableTokens <= 0) {
-        throw new Error('Base prompt exceeds token limit');
-      }
-
-      // 2. Calculate chunk sizes dynamically
+      const SAFETY_MARGIN = 1000;
+      const systemMessage = 'You are a data consolidation assistant. Merge company information, prioritizing newer data and resolving conflicts.';
+      
+      // Get all extracted companies from all files
+      const allCompanies = Object.values(extractedCompanies).flat();
+  
+      // 2. Create chunks based on actual token counts
       const chunks: any[][] = [];
       let currentChunk: any[] = [];
       let currentTokens = 0;
-
-      for (const [key, entry] of Object.entries(rawResponses)) {
-        const entryText = JSON.stringify(entry);
-        // Add 2 tokens for JSON formatting overhead
-        const entryTokens = estimateTokens(entryText) + 2; 
-
-        // Check if entry is too big to process alone
-        if (entryTokens > availableTokens) {
-          throw new Error(
-            `Entry too large (${entryTokens} tokens). Max allowed: ${availableTokens}`
-          );
+  
+      // Base tokens (system message + prompt template without data)
+      const basePrompt = getConsolidationPrompt([]);
+      const baseTokens = estimateTokens(systemMessage) + estimateTokens(basePrompt) + SAFETY_MARGIN;
+  
+      for (const company of allCompanies) {
+        const companyText = JSON.stringify(company);
+        const entryTokens = estimateTokens(companyText) + 50;
+  
+        // Validate single company size
+        if (entryTokens > MAX_TOKENS - baseTokens) {
+          console.error('Oversized company:', company.name);
+          continue; // Skip or implement alternative handling
         }
-
-        if (currentTokens + entryTokens > availableTokens) {
+  
+        // Start new chunk if needed
+        if (currentTokens + entryTokens > MAX_TOKENS - baseTokens) {
           chunks.push(currentChunk);
           currentChunk = [];
           currentTokens = 0;
         }
-
-        currentChunk.push(entry);
+  
+        currentChunk.push(company);
         currentTokens += entryTokens;
       }
-
+  
+      // Add remaining companies
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
       }
-
-      // 3. Process chunks in parallel with error handling
+  
+      // 3. Process chunks with retry logic
       const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-      //debugger;
-      const chunkPromises = chunks.map(async (chunk) => {
-        const chunkPrompt = getConsolidationPrompt(chunk);
+      const MAX_RETRIES = 2;
+      
+      const processChunk = async (chunk: any[], attempt = 0): Promise<any[]> => {
         try {
+          const chunkPrompt = getConsolidationPrompt(chunk);
           const res = await fetch('/api/llm', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -234,81 +246,82 @@ export default function Dashboard() {
               requestType: 'consolidation',
             }),
           });
-      
+  
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           
           const { content } = await res.json();
           const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-          consolidationDebug.push({ prompt: chunkPrompt, response: cleanedContent });
-      
-          // Validate response structure
+          
+          // Validate JSON structure
           const parsed = JSON.parse(cleanedContent);
           if (!Array.isArray(parsed)) {
-            console.error('Invalid consolidation format - not an array:', parsed);
-            return [];
+            throw new Error('Invalid response format - expected array');
           }
-          
-          // Validate minimum required fields
-          const validEntries = parsed.filter((item: any) => 
-            item?.name && item?.type && item?.variables
+  
+          // Validate minimum company fields
+          const validCompanies = parsed.filter(c => 
+            c?.name && c?.type && c?.variables && typeof c.variables === 'object'
           );
-          
-          return validEntries;
-      
+  
+          consolidationDebug.push({ 
+            prompt: chunkPrompt, 
+            response: JSON.stringify(validCompanies) 
+          });
+  
+          return validCompanies;
         } catch (error) {
-          console.error('Chunk processing failed:', error);
-          return []; // Return empty array to prevent pipeline failure
+          if (attempt < MAX_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+            return processChunk(chunk, attempt + 1);
+          }
+          console.error('Chunk processing failed after retries:', error);
+          return [];
         }
-      });
-
-      // 4. Process all chunks and merge results
-      const chunkResults = await Promise.all(chunkPromises);
-      const validResults = chunkResults.filter(Array.isArray);
-
-      if (validResults.length === 0) {
-        throw new Error('All consolidation chunks failed validation');
+      };
+  
+      // 4. Process chunks sequentially to avoid rate limiting
+      let consolidatedResults: any[] = [];
+      for (const chunk of chunks) {
+        const chunkResults = await processChunk(chunk);
+        consolidatedResults = mergeConsolidatedCompanies([
+          ...consolidatedResults,
+          ...chunkResults
+        ]);
       }
-
-      const mergedData = mergeConsolidatedCompanies(validResults.flat());
-
-      // Add final validation
-      if (!mergedData || mergedData.length === 0) {
-        console.error('Final merged data validation failed:', {
-          chunkResults,
-          mergedData
-        });
-        throw new Error('Consolidation produced empty results');
+  
+      // 5. Final validation
+      if (consolidatedResults.length === 0) {
+        throw new Error('Consolidation produced no valid results');
       }
-
-      // 5. Final validation and save
-      if (mergedData.length === 0) {
-        throw new Error('Consolidation produced empty results');
-      }
-
+  
+      // 6. Save results
       setLlmConsolidationDebug(consolidationDebug);
-
-      // Save your updated data
       await saveHeavyData(sessionId, {
         fileTree,
         extractedTexts,
         summaries,
         extractedCompanies,
         rawResponses,
-        consolidatedCompanies: mergedData,
+        consolidatedCompanies: consolidatedResults,
       });
-
-      console.log('Raw chunk data:', chunks);
-      console.log('Chunk prompts:', chunks.map(chunk => getConsolidationPrompt(chunk)));
-      console.log('LLM Responses:', llmConsolidationDebug);
-      console.log('Merged data:', mergedData);
-
-      // Finally, redirect (or do whatever you need)
+  
+      // 7. Debug logging
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Consolidation chunks:', chunks);
+        console.log('Final merged companies:', consolidatedResults);
+        console.log('Token usage:', {
+          baseTokens,
+          perChunk: chunks.map(chunk => ({
+            companies: chunk.length,
+            tokens: estimateTokens(JSON.stringify(chunk))
+          }))
+        });
+      }
+  
       router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
-      alert(`Consolidation failed: ${
-        error instanceof Error ? error.message : 'Unknown error'
-      }`);
+      alert(`Consolidation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsConsolidating(false);
     }
@@ -482,6 +495,7 @@ export default function Dashboard() {
   // ---------------------------
   return (
     <div className="min-h-screen bg-gray-50 relative">
+      <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Success Message */}
         {successMessage && (

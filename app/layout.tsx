@@ -24,7 +24,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         {/* Global NavBar (Client Component) */}
-        <Navbar />
+        
         
         {/* Page content */}
         {children}

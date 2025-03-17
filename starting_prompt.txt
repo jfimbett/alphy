@@ -1,0 +1,126 @@
+I am developing a Next.js application for private equity funds to be able to upload documents and have them
+analyzed using Large Language Models. The application allows for signup/login, and some persistence of user data.
+The application is built mostly using typescript, and uses a local postgres database for storing data, as well as some local storage 
+in the folder of the application for large data.A normal workflow for a user is to upload a folder with documents, 
+select the documents that the users wants analyzed, then the LLM first summarizes the document, then it identifies key variablesto extract, then
+it extracts that information, and finally there is a consolidation step because it can happen that the same ocmpany appears in different documents. 
+
+I need your help with the following things:
+
+1. The consolidation step is failing for some companies, probably because there is very little information to retrieve. 
+In those cases instead of throwing an error, I prefer to just being directed to the companies page but showing there a simple message like no company data retrieved. 
+2. The companies data after consolidation is not being stored correctly I believe in the databases. 
+3. I need a better wat to save/store sessions, because it looks weird now, I need one easier way to have a single session for the user and let it change the documents that he is analyzing. 
+
+Here is the file structure of the project
+
+|-- favicon.ico
+|-- globals.css
+|-- layout.tsx
+|-- page.tsx
+|-- types.ts
+|-- data-aggregated
+  |-- page.tsx
+|-- companies
+  |-- page.tsx
+|-- settings
+  |-- page.tsx
+|-- login
+  |-- page.tsx
+|-- signup
+  |-- page.tsx
+|-- dashboard
+  |-- page.tsx
+  |-- useChat.tsx
+  |-- useFileProcessing.tsx
+  |-- utils
+    |-- fileTreeHelpers.tsx
+|-- data
+  |-- page.tsx
+  |-- [cik]
+    |-- page.tsx
+|-- history
+  |-- page.tsx
+  |-- [sessionId]
+    |-- page.tsx
+|-- api
+  |-- company-facts
+    |-- route.tsx
+  |-- account-data
+    |-- route.tsx
+  |-- all-accounts
+    |-- route.tsx
+  |-- financial-data
+    |-- route.tsx
+  |-- countTokens
+    |-- route.tsx
+  |-- session-file
+    |-- route.tsx
+  |-- search
+    |-- route.tsx
+  |-- llm
+    |-- route.tsx
+  |-- submission-history
+    |-- route.tsx
+  |-- store-heavy-data
+    |-- route.tsx
+  |-- test
+    |-- route.tsx
+  |-- auth
+    |-- login
+      |-- route.tsx
+    |-- signup
+      |-- route.tsx
+  |-- files
+    |-- route.tsx
+    |-- [fileId]
+      |-- route.tsx
+  |-- sessions
+    |-- route.tsx
+    |-- [sessionId]
+      |-- route.tsx
+  |-- uploads
+    |-- route.tsx
+    |-- [uploadId]
+      |-- route.tsx
+|-- AlphyAnimation.tsx
+|-- AnalysisPreview.tsx
+|-- ChatMessage.tsx
+|-- CompanyInfoComponent.tsx
+|-- CompanySearch.tsx
+|-- ExtractedTextComponent.tsx
+|-- FileTree.tsx
+|-- FileUploader.tsx
+|-- Footer.tsx
+|-- Navbar.tsx
+|-- SummaryContent.tsx
+|-- TestimonialsSlider.tsx
+|-- dashboard
+  |-- ChatSection.tsx
+  |-- FileAnalysisProgress.tsx
+  |-- FilePreviewSection.tsx
+  |-- FileUploadArea.tsx
+  |-- LoadSessionModal.tsx
+  |-- ModelSelector.tsx
+  |-- RadioButtons.tsx
+  |-- SaveSessionModal.tsx
+  |-- SessionNameModal.tsx
+|-- ui
+  |-- card.tsx
+  |-- command.tsx
+  |-- company-facts-page.tsx
+  |-- input.tsx
+  |-- search-form.tsx
+  |-- search-input.tsx
+  |-- search-results.tsx
+  |-- skeleton.tsx
+  |-- spinner.tsx
+
+plus some other standard files in a Next.js project.
+
+Always return the code in a clear manner, commented, and using best practices. If you are not returning the entire code of 
+the file you need to be extremely clear where I should incorporate that code. 
+
+Here are the files you need 
+
+{insert files here}
