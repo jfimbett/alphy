@@ -29,9 +29,13 @@ import { SessionSummary } from '@/app/history/page';
 import { run } from 'node:test';
 import Navbar from '@/components/Navbar';
 
-// ---------------------------------------------------
-// Helper Functions (NEWLY ADDED)
-// ---------------------------------------------------
+import { getModelConfig } from '@/lib/modelConfig';
+
+/**
+ * ---------------------------------------------------
+ * Helper Functions
+ * ---------------------------------------------------
+ */
 
 // Token estimation with optional GPT-3 encoder
 const estimateTokens = (text: string): number => {
@@ -45,6 +49,7 @@ const estimateTokens = (text: string): number => {
   return heuristicEstimate;
 };
 
+// Merges multiple arrays (or a single array) of companies by name
 const mergeConsolidatedCompanies = (companiesArray: any[]) => {
   const companyMap = new Map<string, any>();
 
@@ -65,7 +70,8 @@ const mergeConsolidatedCompanies = (companiesArray: any[]) => {
       if (typeof value === 'number') {
         existing.variables[key] = (existing.variables[key] || 0) + value;
       } else if (value instanceof Date) {
-        existing.variables[key] = value > existing.variables[key] ? value : existing.variables[key];
+        existing.variables[key] =
+          value > existing.variables[key] ? value : existing.variables[key];
       } else {
         existing.variables[key] = value || existing.variables[key];
       }
@@ -98,8 +104,6 @@ const deepMerge = (target: any, source: any) => {
   });
   return Object.assign(target, source);
 };
-
-// ---------------------------------------------------
 
 type ExistingUpload = {
   upload_id: number;
@@ -151,12 +155,21 @@ export default function Dashboard() {
     handleChatSubmit,
   } = useChat();
 
-  const [selectedSummarizationModel, setSelectedSummarizationModel] = useState('deepseek:deepseek-chat');
-  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] = useState('deepseek:deepseek-reasoner');
+  // Models chosen by user
+  const [selectedSummarizationModel, setSelectedSummarizationModel] =
+    useState('deepseek:deepseek-chat');
+  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] =
+    useState('deepseek:deepseek-reasoner');
+
+  // Toggles to run Summarization / Info Retrieval
   const [runSummarization, setRunSummarization] = useState(true);
   const [runInfoRetrieval, setRunInfoRetrieval] = useState(true);
+
+  // UI states
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
-  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
+  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(
+    new Set()
+  );
   const [showExtracted, setShowExtracted] = useState(false);
   const [allSelected, setAllSelected] = useState(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -164,75 +177,85 @@ export default function Dashboard() {
   const [successMessage, setSuccessMessage] = useState('');
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
-  const [selectedUploadOption, setSelectedUploadOption] = useState<'new' | 'existing'>('new');
+  const [selectedUploadOption, setSelectedUploadOption] =
+    useState<'new' | 'existing'>('new');
   const [newUploadName, setNewUploadName] = useState('');
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
-  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
+  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>(
+    []
+  );
   const [isConsolidating, setIsConsolidating] = useState(false);
 
-  // New state for LLM consolidation debug info
+  // Debug info for LLM consolidation
   const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<
     { prompt: string; response: string }[]
   >([]);
 
-  // New state to toggle showing the debug panel
+  // Toggle debug info
   const [showDebug, setShowDebug] = useState(false);
 
-  // ---------------------------------------------------
-  // Consolidate Companies (UPDATED)
-  // ---------------------------------------------------
+  /**
+   * ---------------------------------------------------
+   * Consolidate Companies with Chunking
+   * ---------------------------------------------------
+   */
   const handleConsolidateCompanies = async (sessionId: string) => {
     setIsConsolidating(true);
     try {
+      // 1) Grab the model config (contextWindow, tokenSafetyMargin, etc.)
+      const modelConfig = getModelConfig(selectedInfoRetrievalModel);
 
-      const MAX_TOKENS = 65536;
-      const SAFETY_MARGIN = 1000;
-      const systemMessage = 'You are a data consolidation assistant. Merge company information, prioritizing newer data and resolving conflicts.';
-      
-      // Get all extracted companies from all files
+      // 2) Flatten all extracted companies across files
       const allCompanies = Object.values(extractedCompanies).flat();
-  
-      // 2. Create chunks based on actual token counts
+
+      // 3) We'll define MAX_TOKENS as the model's contextWindow
+      const MAX_TOKENS = modelConfig.contextWindow;
+
+      // 4) Prepare chunking logic
       const chunks: any[][] = [];
       let currentChunk: any[] = [];
       let currentTokens = 0;
-  
-      // Base tokens (system message + prompt template without data)
+
+      // The basePrompt is the consolidation template with an empty array,
+      // so we see how many tokens are "overhead."
       const basePrompt = getConsolidationPrompt([]);
-      const baseTokens = estimateTokens(systemMessage) + estimateTokens(basePrompt) + SAFETY_MARGIN;
-  
+     
+      const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
+      const availableTokensPerChunk = MAX_TOKENS - baseTokens - 8000; // Reserve 8000 tokens for completion
+
       for (const company of allCompanies) {
         const companyText = JSON.stringify(company);
+        // The snippet uses a +50 "safety offset" for each company
         const entryTokens = estimateTokens(companyText) + 50;
-  
-        // Validate single company size
-        if (entryTokens > MAX_TOKENS - baseTokens) {
+
+        // Validate single company size: if it alone exceeds context, skip or handle differently
+        if (entryTokens > availableTokensPerChunk) {
           console.error('Oversized company:', company.name);
-          continue; // Skip or implement alternative handling
+          continue;
         }
-  
-        // Start new chunk if needed
-        if (currentTokens + entryTokens > MAX_TOKENS - baseTokens) {
+
+        // Start a new chunk if adding this company would exceed the limit
+        if (currentTokens + entryTokens > availableTokensPerChunk) {
           chunks.push(currentChunk);
           currentChunk = [];
           currentTokens = 0;
         }
-  
+
         currentChunk.push(company);
         currentTokens += entryTokens;
       }
-  
-      // Add remaining companies
+
+      // If anything remains in currentChunk, push it
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
       }
-  
-      // 3. Process chunks with retry logic
+
+      // 5) Process each chunk with fetch, plus optional retry logic
       const consolidationDebug: Array<{ prompt: string; response: string }> = [];
       const MAX_RETRIES = 2;
-      
+
       const processChunk = async (chunk: any[], attempt = 0): Promise<any[]> => {
         try {
           const chunkPrompt = getConsolidationPrompt(chunk);
@@ -246,55 +269,61 @@ export default function Dashboard() {
               requestType: 'consolidation',
             }),
           });
-  
+
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          
+
           const { content } = await res.json();
-          const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-          
+          const cleanedContent = content
+            .replace(/```json/g, '')
+            .replace(/```/g, '')
+            .trim();
+
           // Validate JSON structure
           const parsed = JSON.parse(cleanedContent);
           if (!Array.isArray(parsed)) {
             throw new Error('Invalid response format - expected array');
           }
-  
+
           // Validate minimum company fields
-          const validCompanies = parsed.filter(c => 
-            c?.name && c?.type && c?.variables && typeof c.variables === 'object'
+          const validCompanies = parsed.filter(
+            (c) =>
+              c?.name && c?.type && c?.variables && typeof c.variables === 'object'
           );
-  
-          consolidationDebug.push({ 
-            prompt: chunkPrompt, 
-            response: JSON.stringify(validCompanies) 
+
+          // Keep track of prompt/response for debugging
+          consolidationDebug.push({
+            prompt: chunkPrompt,
+            response: JSON.stringify(validCompanies),
           });
-  
+
           return validCompanies;
         } catch (error) {
+          // If it fails, we try up to MAX_RETRIES times
           if (attempt < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+            await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
             return processChunk(chunk, attempt + 1);
           }
           console.error('Chunk processing failed after retries:', error);
           return [];
         }
       };
-  
-      // 4. Process chunks sequentially to avoid rate limiting
+
+      // 6) Go chunk-by-chunk, building the consolidated results
       let consolidatedResults: any[] = [];
       for (const chunk of chunks) {
         const chunkResults = await processChunk(chunk);
         consolidatedResults = mergeConsolidatedCompanies([
           ...consolidatedResults,
-          ...chunkResults
+          ...chunkResults,
         ]);
       }
-  
-      // 5. Final validation
+
+      // 7) Final check: if no results, error out
       if (consolidatedResults.length === 0) {
         throw new Error('Consolidation produced no valid results');
       }
-  
-      // 6. Save results
+
+      // 8) Save results (with debug info, etc.)
       setLlmConsolidationDebug(consolidationDebug);
       await saveHeavyData(sessionId, {
         fileTree,
@@ -304,20 +333,20 @@ export default function Dashboard() {
         rawResponses,
         consolidatedCompanies: consolidatedResults,
       });
-  
-      // 7. Debug logging
+
+      // Debug logs if in dev mode
       if (process.env.NODE_ENV === 'development') {
         console.log('Consolidation chunks:', chunks);
         console.log('Final merged companies:', consolidatedResults);
         console.log('Token usage:', {
           baseTokens,
-          perChunk: chunks.map(chunk => ({
+          perChunk: chunks.map((chunk) => ({
             companies: chunk.length,
-            tokens: estimateTokens(JSON.stringify(chunk))
-          }))
+            tokens: estimateTokens(JSON.stringify(chunk)),
+          })),
         });
       }
-  
+
       router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
@@ -327,22 +356,27 @@ export default function Dashboard() {
     }
   };
 
-  // ---------------------------
-  // On Mount: Check User Auth
-  // ---------------------------
+  /**
+   * ---------------------------
+   * On Mount: Check User Auth
+   * ---------------------------
+   */
   useEffect(() => {
-    const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    const userId =
+      typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
     const currentSessionId = localStorage.getItem('currentSessionId');
     if (!userId) {
       router.push('/login');
-    }else if (currentSessionId) {
+    } else if (currentSessionId) {
       setCurrentSessionId(currentSessionId);
     }
   }, [router]);
 
-  // ---------------------------
-  // Helper to get all files
-  // ---------------------------
+  /**
+   * ---------------------------
+   * Helper to get all files
+   * ---------------------------
+   */
   const getAllFiles = (nodes: FileNode[]): FileNode[] => {
     return nodes.flatMap((node) => {
       if (node.type === 'folder' && node.children) {
@@ -352,18 +386,22 @@ export default function Dashboard() {
     });
   };
 
-  // ---------------------------
-  // File Selection
-  // ---------------------------
+  /**
+   * ---------------------------
+   * File Selection
+   * ---------------------------
+   */
   const handleFileSelect = (node: FileNode) => {
     if (node.type === 'folder') return;
     if (!node.content) node.content = ''; // Ensure content is always a string
     setSelectedFile(node);
   };
 
-  // ---------------------------
-  // "Save Session" Modal
-  // ---------------------------
+  /**
+   * ---------------------------
+   * "Save Session" Modal
+   * ---------------------------
+   */
   const openSaveModal = async () => {
     setNewUploadName('');
     setExistingUploadId(null);
@@ -391,8 +429,9 @@ export default function Dashboard() {
 
   const handleSaveConfirm = async () => {
     try {
-       // Get the session name from your state (you'll need to ensure this is populated)
-      const sessionName = newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
+      // Get the session name from your state (you'll need to ensure this is populated)
+      const sessionName =
+        newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
       const sessionId = await saveSession(sessionName);
       localStorage.setItem('currentSessionId', sessionId);
       setShowSaveModal(false);
@@ -416,12 +455,12 @@ export default function Dashboard() {
     const data = await res.json();
     setCurrentSessionId(data.session_id);
     await saveHeavyData(data.session_id, {
-        fileTree: fileTreeWithBase64,
-        extractedTexts,
-        summaries,
-        extractedCompanies,
-        rawResponses,
-      });
+      fileTree: fileTreeWithBase64,
+      extractedTexts,
+      summaries,
+      extractedCompanies,
+      rawResponses,
+    });
 
     setCurrentSessionId(data.session_id);
 
@@ -430,9 +469,11 @@ export default function Dashboard() {
     return data.session_id;
   }
 
-  // ---------------------------
-  // "Load Session" Modal
-  // ---------------------------
+  /**
+   * ---------------------------
+   * "Load Session" Modal
+   * ---------------------------
+   */
   const handleLoadClick = async () => {
     try {
       const res = await fetch('/api/sessions', {
@@ -464,6 +505,8 @@ export default function Dashboard() {
         alert('No session data found.');
         return;
       }
+
+      // 2) Fetch heavy data
       const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
@@ -487,9 +530,11 @@ export default function Dashboard() {
     }
   };
 
-  // ---------------------------
-  // Rendering
-  // ---------------------------
+  /**
+   * ---------------------------
+   * Rendering
+   * ---------------------------
+   */
   return (
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
@@ -511,7 +556,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Replace the existing ModelSelector section with this */}
+        {/* Summarization / Info Retrieval Toggles & Model Selectors */}
         <div className="space-y-4 mb-6 text-gray-600">
           <div className="bg-white p-4 rounded-lg">
             <label className="flex items-center gap-3 mb-2">
@@ -554,30 +599,42 @@ export default function Dashboard() {
             <div className="mb-4 flex items-center justify-between">
               <FileAnalysisButtons
                 fileTree={fileTree}
-                summarizationModel={runSummarization ? selectedSummarizationModel : ''}
-                infoRetrievalModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
-                consolidationModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
+                summarizationModel={
+                  runSummarization ? selectedSummarizationModel : ''
+                }
+                infoRetrievalModel={
+                  runInfoRetrieval ? selectedInfoRetrievalModel : ''
+                }
+                consolidationModel={
+                  runInfoRetrieval ? selectedInfoRetrievalModel : ''
+                }
                 runSummarization={runSummarization}
                 runInfoRetrieval={runInfoRetrieval}
                 analyzeFiles={async () => {
                   try {
                     // Run analysis
-                        await analyzeFiles({
-                          runSummarization,
-                          runInfoRetrieval,
-                          summarizationModel: runSummarization ? selectedSummarizationModel : undefined,
-                          infoRetrievalModel: runInfoRetrieval ? selectedInfoRetrievalModel : undefined
-                        });
-                  
-                        // Auto-save session with generated name
-                        const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
-                        const sessionId = await saveSession(sessionName);
-                        
-                      } catch (error) {
-                        console.error('Processing error:', error);
-                        alert("Analysis failed: " + (error instanceof Error ? error.message : 'Unknown error'));
-                      }
-                    }}
+                    await analyzeFiles({
+                      runSummarization,
+                      runInfoRetrieval,
+                      summarizationModel: runSummarization
+                        ? selectedSummarizationModel
+                        : undefined,
+                      infoRetrievalModel: runInfoRetrieval
+                        ? selectedInfoRetrievalModel
+                        : undefined,
+                    });
+
+                    // Auto-save session with generated name
+                    const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
+                    const sessionId = await saveSession(sessionName);
+                  } catch (error) {
+                    console.error('Processing error:', error);
+                    alert(
+                      'Analysis failed: ' +
+                        (error instanceof Error ? error.message : 'Unknown error')
+                    );
+                  }
+                }}
                 openSaveModal={openSaveModal}
                 toggleAllFiles={toggleAllFiles}
                 allSelected={allSelected}
@@ -596,7 +653,9 @@ export default function Dashboard() {
               nodes={fileTree}
               onSelect={handleFileSelect}
               selectedFile={
-                selectedFile ? { ...selectedFile, content: selectedFile.content || '' } : null
+                selectedFile
+                  ? { ...selectedFile, content: selectedFile.content || '' }
+                  : null
               }
               onToggleConversion={(path) => {
                 const updateNodes = (nodes: FileNode[]): FileNode[] =>
@@ -641,6 +700,7 @@ export default function Dashboard() {
           />
         )}
 
+        {/* Consolidate Companies Button */}
         {fileTree.length > 0 && (
           <button
             onClick={() => {
@@ -669,6 +729,7 @@ export default function Dashboard() {
           {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
         </button>
 
+        {/* Debug Info */}
         {showDebug && (
           <div className="bg-white p-4 rounded shadow mb-6 max-h-80 overflow-y-auto text-gray-600">
             <h3 className="text-lg font-semibold mb-2">Extraction Debug Info</h3>
@@ -685,14 +746,17 @@ export default function Dashboard() {
             ))}
             {llmConsolidationDebug.length > 0 && (
               <div className="mt-4 border-t pt-2">
-                <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
+                <h3 className="text-lg font-semibold mb-2">
+                  Consolidation Debug Info
+                </h3>
                 {llmConsolidationDebug.map((debug, index) => (
                   <div key={index} className="mb-4 border-b pb-2">
                     <p className="text-sm text-gray-600">
                       <span className="font-semibold">Prompt:</span> {debug.prompt}
                     </p>
                     <p className="text-sm text-gray-600">
-                      <span className="font-semibold">Response:</span> {debug.response}
+                      <span className="font-semibold">Response:</span>{' '}
+                      {debug.response}
                     </p>
                   </div>
                 ))}
@@ -700,7 +764,6 @@ export default function Dashboard() {
             )}
           </div>
         )}
-    
 
         {/* Save Modal */}
         <SaveModal

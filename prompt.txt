@@ -1,38 +1,15 @@
 I am developing a Next.js application for private equity funds to be able to upload documents and have them
 analyzed using Large Language Models. The application allows for signup/login, and some persistence of user data.
 The application is built mostly using typescript, and uses a local postgres database for storing data, as well as some local storage 
-in the folder of the application for large data.A normal workflow for a user is to upload a folder with documents, 
+in the folder of the application for large data. A normal workflow for a user is to upload a folder with documents, 
 select the documents that the users wants analyzed, then the LLM first summarizes the document, then it identifies key variablesto extract, then
-it extracts that information, and finally there is a consolidation step because it can happen that the same ocmpany appears in different documents. 
+it extracts that information, and finally there is a consolidation step because it can happen that the same company 
+appears in different documents. 
 
 I need your help with the following things:
 
-1. Sometimes a call to the LLM fails, this could be for many reasons but I need to be able to see it in order to debug it. 
-for example I see this error some TestimonialsSlider
-Response JSON Parse Error: SyntaxError: Unexpected end of JSON input
-    at JSON.parse (<anonymous>)
-    at POST (file://C%3A/Users/jimbet/Documents/alphy/app/api/llm/route.tsx:94:26)
-  92 |         }
-  93 |
-> 94 |         const data = JSON.parse(responseText);
-     |                          ^
-  95 |
-  96 |         let content = '';
-  97 |
- POST /api/llm 500 in 601093ms
-
- In order to better understand, I need you to create a log file, store it in a folder in the root folder of the project, in which 
- i can see all the conversation with the LLM and the application. Be explicit in showing me the model that is being used, the data that the user sends and the data that the LLM returns
-
- 2. The companies page since the information that appears there is linked to a session, should also have the option 
- for the user to choose a session right there. 
-
- 3. Is it possible to relate session ids with the name that the user has put to the session? For now is just numbers that are +1 every time. 
-
- 3. The history page does not have the option to load a session, just to look at it, there could be an option enxt to each session item. 
-
- 4. I am not seeing the consolidated information being saved in the session, this can be because I first save it before consolidating, and then 
- once its consolidated I am not sure it is being saved again. 
+1. When analyzing companies and then consolidating the information the AI needs to help the user understand the tree of ownership. In the sense that some data can come from funds, some data from funds od funds, and some data from companies. The AI needs to do this automatically. 
+2. When the user observes data that has been extracted from all these documents, it needs to also know where the data comes from. For sure the name of the file where the data was extracted, but ideally also the page. 
 
 
 Here is the file structure of the project
@@ -179,9 +156,13 @@ import { SessionSummary } from '@/app/history/page';
 import { run } from 'node:test';
 import Navbar from '@/components/Navbar';
 
-// ---------------------------------------------------
-// Helper Functions (NEWLY ADDED)
-// ---------------------------------------------------
+import { getModelConfig } from '@/lib/modelConfig';
+
+/**
+ * ---------------------------------------------------
+ * Helper Functions
+ * ---------------------------------------------------
+ */
 
 // Token estimation with optional GPT-3 encoder
 const estimateTokens = (text: string): number => {
@@ -195,6 +176,7 @@ const estimateTokens = (text: string): number => {
   return heuristicEstimate;
 };
 
+// Merges multiple arrays (or a single array) of companies by name
 const mergeConsolidatedCompanies = (companiesArray: any[]) => {
   const companyMap = new Map<string, any>();
 
@@ -215,7 +197,8 @@ const mergeConsolidatedCompanies = (companiesArray: any[]) => {
       if (typeof value === 'number') {
         existing.variables[key] = (existing.variables[key] || 0) + value;
       } else if (value instanceof Date) {
-        existing.variables[key] = value > existing.variables[key] ? value : existing.variables[key];
+        existing.variables[key] =
+          value > existing.variables[key] ? value : existing.variables[key];
       } else {
         existing.variables[key] = value || existing.variables[key];
       }
@@ -248,8 +231,6 @@ const deepMerge = (target: any, source: any) => {
   });
   return Object.assign(target, source);
 };
-
-// ---------------------------------------------------
 
 type ExistingUpload = {
   upload_id: number;
@@ -301,12 +282,21 @@ export default function Dashboard() {
     handleChatSubmit,
   } = useChat();
 
-  const [selectedSummarizationModel, setSelectedSummarizationModel] = useState('deepseek:deepseek-chat');
-  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] = useState('deepseek:deepseek-reasoner');
+  // Models chosen by user
+  const [selectedSummarizationModel, setSelectedSummarizationModel] =
+    useState('deepseek:deepseek-chat');
+  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] =
+    useState('deepseek:deepseek-reasoner');
+
+  // Toggles to run Summarization / Info Retrieval
   const [runSummarization, setRunSummarization] = useState(true);
   const [runInfoRetrieval, setRunInfoRetrieval] = useState(true);
+
+  // UI states
   const [currentZipName, setCurrentZipName] = useState<string | null>(null);
-  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(new Set());
+  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(
+    new Set()
+  );
   const [showExtracted, setShowExtracted] = useState(false);
   const [allSelected, setAllSelected] = useState(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -314,75 +304,85 @@ export default function Dashboard() {
   const [successMessage, setSuccessMessage] = useState('');
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
-  const [selectedUploadOption, setSelectedUploadOption] = useState<'new' | 'existing'>('new');
+  const [selectedUploadOption, setSelectedUploadOption] =
+    useState<'new' | 'existing'>('new');
   const [newUploadName, setNewUploadName] = useState('');
   const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
   const [fetchingUploads, setFetchingUploads] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
-  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
+  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>(
+    []
+  );
   const [isConsolidating, setIsConsolidating] = useState(false);
 
-  // New state for LLM consolidation debug info
+  // Debug info for LLM consolidation
   const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<
     { prompt: string; response: string }[]
   >([]);
 
-  // New state to toggle showing the debug panel
+  // Toggle debug info
   const [showDebug, setShowDebug] = useState(false);
 
-  // ---------------------------------------------------
-  // Consolidate Companies (UPDATED)
-  // ---------------------------------------------------
+  /**
+   * ---------------------------------------------------
+   * Consolidate Companies with Chunking
+   * ---------------------------------------------------
+   */
   const handleConsolidateCompanies = async (sessionId: string) => {
     setIsConsolidating(true);
     try {
+      // 1) Grab the model config (contextWindow, tokenSafetyMargin, etc.)
+      const modelConfig = getModelConfig(selectedInfoRetrievalModel);
 
-      const MAX_TOKENS = 65536;
-      const SAFETY_MARGIN = 1000;
-      const systemMessage = 'You are a data consolidation assistant. Merge company information, prioritizing newer data and resolving conflicts.';
-      
-      // Get all extracted companies from all files
+      // 2) Flatten all extracted companies across files
       const allCompanies = Object.values(extractedCompanies).flat();
-  
-      // 2. Create chunks based on actual token counts
+
+      // 3) We'll define MAX_TOKENS as the model's contextWindow
+      const MAX_TOKENS = modelConfig.contextWindow;
+
+      // 4) Prepare chunking logic
       const chunks: any[][] = [];
       let currentChunk: any[] = [];
       let currentTokens = 0;
-  
-      // Base tokens (system message + prompt template without data)
+
+      // The basePrompt is the consolidation template with an empty array,
+      // so we see how many tokens are "overhead."
       const basePrompt = getConsolidationPrompt([]);
-      const baseTokens = estimateTokens(systemMessage) + estimateTokens(basePrompt) + SAFETY_MARGIN;
-  
+     
+      const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
+      const availableTokensPerChunk = MAX_TOKENS - baseTokens - 8000; // Reserve 8000 tokens for completion
+
       for (const company of allCompanies) {
         const companyText = JSON.stringify(company);
+        // The snippet uses a +50 "safety offset" for each company
         const entryTokens = estimateTokens(companyText) + 50;
-  
-        // Validate single company size
-        if (entryTokens > MAX_TOKENS - baseTokens) {
+
+        // Validate single company size: if it alone exceeds context, skip or handle differently
+        if (entryTokens > availableTokensPerChunk) {
           console.error('Oversized company:', company.name);
-          continue; // Skip or implement alternative handling
+          continue;
         }
-  
-        // Start new chunk if needed
-        if (currentTokens + entryTokens > MAX_TOKENS - baseTokens) {
+
+        // Start a new chunk if adding this company would exceed the limit
+        if (currentTokens + entryTokens > availableTokensPerChunk) {
           chunks.push(currentChunk);
           currentChunk = [];
           currentTokens = 0;
         }
-  
+
         currentChunk.push(company);
         currentTokens += entryTokens;
       }
-  
-      // Add remaining companies
+
+      // If anything remains in currentChunk, push it
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
       }
-  
-      // 3. Process chunks with retry logic
+
+      // 5) Process each chunk with fetch, plus optional retry logic
       const consolidationDebug: Array<{ prompt: string; response: string }> = [];
       const MAX_RETRIES = 2;
-      
+
       const processChunk = async (chunk: any[], attempt = 0): Promise<any[]> => {
         try {
           const chunkPrompt = getConsolidationPrompt(chunk);
@@ -396,55 +396,61 @@ export default function Dashboard() {
               requestType: 'consolidation',
             }),
           });
-  
+
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          
+
           const { content } = await res.json();
-          const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-          
+          const cleanedContent = content
+            .replace(/```json/g, '')
+            .replace(/```/g, '')
+            .trim();
+
           // Validate JSON structure
           const parsed = JSON.parse(cleanedContent);
           if (!Array.isArray(parsed)) {
             throw new Error('Invalid response format - expected array');
           }
-  
+
           // Validate minimum company fields
-          const validCompanies = parsed.filter(c => 
-            c?.name && c?.type && c?.variables && typeof c.variables === 'object'
+          const validCompanies = parsed.filter(
+            (c) =>
+              c?.name && c?.type && c?.variables && typeof c.variables === 'object'
           );
-  
-          consolidationDebug.push({ 
-            prompt: chunkPrompt, 
-            response: JSON.stringify(validCompanies) 
+
+          // Keep track of prompt/response for debugging
+          consolidationDebug.push({
+            prompt: chunkPrompt,
+            response: JSON.stringify(validCompanies),
           });
-  
+
           return validCompanies;
         } catch (error) {
+          // If it fails, we try up to MAX_RETRIES times
           if (attempt < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+            await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
             return processChunk(chunk, attempt + 1);
           }
           console.error('Chunk processing failed after retries:', error);
           return [];
         }
       };
-  
-      // 4. Process chunks sequentially to avoid rate limiting
+
+      // 6) Go chunk-by-chunk, building the consolidated results
       let consolidatedResults: any[] = [];
       for (const chunk of chunks) {
         const chunkResults = await processChunk(chunk);
         consolidatedResults = mergeConsolidatedCompanies([
           ...consolidatedResults,
-          ...chunkResults
+          ...chunkResults,
         ]);
       }
-  
-      // 5. Final validation
+
+      // 7) Final check: if no results, error out
       if (consolidatedResults.length === 0) {
         throw new Error('Consolidation produced no valid results');
       }
-  
-      // 6. Save results
+
+      // 8) Save results (with debug info, etc.)
       setLlmConsolidationDebug(consolidationDebug);
       await saveHeavyData(sessionId, {
         fileTree,
@@ -454,20 +460,20 @@ export default function Dashboard() {
         rawResponses,
         consolidatedCompanies: consolidatedResults,
       });
-  
-      // 7. Debug logging
+
+      // Debug logs if in dev mode
       if (process.env.NODE_ENV === 'development') {
         console.log('Consolidation chunks:', chunks);
         console.log('Final merged companies:', consolidatedResults);
         console.log('Token usage:', {
           baseTokens,
-          perChunk: chunks.map(chunk => ({
+          perChunk: chunks.map((chunk) => ({
             companies: chunk.length,
-            tokens: estimateTokens(JSON.stringify(chunk))
-          }))
+            tokens: estimateTokens(JSON.stringify(chunk)),
+          })),
         });
       }
-  
+
       router.push(`/companies?sessionId=${sessionId}`);
     } catch (error) {
       console.error('Consolidation error:', error);
@@ -477,22 +483,27 @@ export default function Dashboard() {
     }
   };
 
-  // ---------------------------
-  // On Mount: Check User Auth
-  // ---------------------------
+  /**
+   * ---------------------------
+   * On Mount: Check User Auth
+   * ---------------------------
+   */
   useEffect(() => {
-    const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+    const userId =
+      typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
     const currentSessionId = localStorage.getItem('currentSessionId');
     if (!userId) {
       router.push('/login');
-    }else if (currentSessionId) {
+    } else if (currentSessionId) {
       setCurrentSessionId(currentSessionId);
     }
   }, [router]);
 
-  // ---------------------------
-  // Helper to get all files
-  // ---------------------------
+  /**
+   * ---------------------------
+   * Helper to get all files
+   * ---------------------------
+   */
   const getAllFiles = (nodes: FileNode[]): FileNode[] => {
     return nodes.flatMap((node) => {
       if (node.type === 'folder' && node.children) {
@@ -502,18 +513,22 @@ export default function Dashboard() {
     });
   };
 
-  // ---------------------------
-  // File Selection
-  // ---------------------------
+  /**
+   * ---------------------------
+   * File Selection
+   * ---------------------------
+   */
   const handleFileSelect = (node: FileNode) => {
     if (node.type === 'folder') return;
     if (!node.content) node.content = ''; // Ensure content is always a string
     setSelectedFile(node);
   };
 
-  // ---------------------------
-  // "Save Session" Modal
-  // ---------------------------
+  /**
+   * ---------------------------
+   * "Save Session" Modal
+   * ---------------------------
+   */
   const openSaveModal = async () => {
     setNewUploadName('');
     setExistingUploadId(null);
@@ -541,8 +556,9 @@ export default function Dashboard() {
 
   const handleSaveConfirm = async () => {
     try {
-       // Get the session name from your state (you'll need to ensure this is populated)
-      const sessionName = newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
+      // Get the session name from your state (you'll need to ensure this is populated)
+      const sessionName =
+        newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
       const sessionId = await saveSession(sessionName);
       localStorage.setItem('currentSessionId', sessionId);
       setShowSaveModal(false);
@@ -566,12 +582,12 @@ export default function Dashboard() {
     const data = await res.json();
     setCurrentSessionId(data.session_id);
     await saveHeavyData(data.session_id, {
-        fileTree: fileTreeWithBase64,
-        extractedTexts,
-        summaries,
-        extractedCompanies,
-        rawResponses,
-      });
+      fileTree: fileTreeWithBase64,
+      extractedTexts,
+      summaries,
+      extractedCompanies,
+      rawResponses,
+    });
 
     setCurrentSessionId(data.session_id);
 
@@ -580,9 +596,11 @@ export default function Dashboard() {
     return data.session_id;
   }
 
-  // ---------------------------
-  // "Load Session" Modal
-  // ---------------------------
+  /**
+   * ---------------------------
+   * "Load Session" Modal
+   * ---------------------------
+   */
   const handleLoadClick = async () => {
     try {
       const res = await fetch('/api/sessions', {
@@ -614,6 +632,8 @@ export default function Dashboard() {
         alert('No session data found.');
         return;
       }
+
+      // 2) Fetch heavy data
       const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
       if (!heavyRes.ok) throw new Error('Failed to load heavy data');
       const heavyData = await heavyRes.json();
@@ -637,9 +657,11 @@ export default function Dashboard() {
     }
   };
 
-  // ---------------------------
-  // Rendering
-  // ---------------------------
+  /**
+   * ---------------------------
+   * Rendering
+   * ---------------------------
+   */
   return (
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
@@ -661,7 +683,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Replace the existing ModelSelector section with this */}
+        {/* Summarization / Info Retrieval Toggles & Model Selectors */}
         <div className="space-y-4 mb-6 text-gray-600">
           <div className="bg-white p-4 rounded-lg">
             <label className="flex items-center gap-3 mb-2">
@@ -704,30 +726,42 @@ export default function Dashboard() {
             <div className="mb-4 flex items-center justify-between">
               <FileAnalysisButtons
                 fileTree={fileTree}
-                summarizationModel={runSummarization ? selectedSummarizationModel : ''}
-                infoRetrievalModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
-                consolidationModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
+                summarizationModel={
+                  runSummarization ? selectedSummarizationModel : ''
+                }
+                infoRetrievalModel={
+                  runInfoRetrieval ? selectedInfoRetrievalModel : ''
+                }
+                consolidationModel={
+                  runInfoRetrieval ? selectedInfoRetrievalModel : ''
+                }
                 runSummarization={runSummarization}
                 runInfoRetrieval={runInfoRetrieval}
                 analyzeFiles={async () => {
                   try {
                     // Run analysis
-                        await analyzeFiles({
-                          runSummarization,
-                          runInfoRetrieval,
-                          summarizationModel: runSummarization ? selectedSummarizationModel : undefined,
-                          infoRetrievalModel: runInfoRetrieval ? selectedInfoRetrievalModel : undefined
-                        });
-                  
-                        // Auto-save session with generated name
-                        const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
-                        const sessionId = await saveSession(sessionName);
-                        
-                      } catch (error) {
-                        console.error('Processing error:', error);
-                        alert("Analysis failed: " + (error instanceof Error ? error.message : 'Unknown error'));
-                      }
-                    }}
+                    await analyzeFiles({
+                      runSummarization,
+                      runInfoRetrieval,
+                      summarizationModel: runSummarization
+                        ? selectedSummarizationModel
+                        : undefined,
+                      infoRetrievalModel: runInfoRetrieval
+                        ? selectedInfoRetrievalModel
+                        : undefined,
+                    });
+
+                    // Auto-save session with generated name
+                    const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
+                    const sessionId = await saveSession(sessionName);
+                  } catch (error) {
+                    console.error('Processing error:', error);
+                    alert(
+                      'Analysis failed: ' +
+                        (error instanceof Error ? error.message : 'Unknown error')
+                    );
+                  }
+                }}
                 openSaveModal={openSaveModal}
                 toggleAllFiles={toggleAllFiles}
                 allSelected={allSelected}
@@ -746,7 +780,9 @@ export default function Dashboard() {
               nodes={fileTree}
               onSelect={handleFileSelect}
               selectedFile={
-                selectedFile ? { ...selectedFile, content: selectedFile.content || '' } : null
+                selectedFile
+                  ? { ...selectedFile, content: selectedFile.content || '' }
+                  : null
               }
               onToggleConversion={(path) => {
                 const updateNodes = (nodes: FileNode[]): FileNode[] =>
@@ -791,6 +827,7 @@ export default function Dashboard() {
           />
         )}
 
+        {/* Consolidate Companies Button */}
         {fileTree.length > 0 && (
           <button
             onClick={() => {
@@ -819,6 +856,7 @@ export default function Dashboard() {
           {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
         </button>
 
+        {/* Debug Info */}
         {showDebug && (
           <div className="bg-white p-4 rounded shadow mb-6 max-h-80 overflow-y-auto text-gray-600">
             <h3 className="text-lg font-semibold mb-2">Extraction Debug Info</h3>
@@ -835,14 +873,17 @@ export default function Dashboard() {
             ))}
             {llmConsolidationDebug.length > 0 && (
               <div className="mt-4 border-t pt-2">
-                <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
+                <h3 className="text-lg font-semibold mb-2">
+                  Consolidation Debug Info
+                </h3>
                 {llmConsolidationDebug.map((debug, index) => (
                   <div key={index} className="mb-4 border-b pb-2">
                     <p className="text-sm text-gray-600">
                       <span className="font-semibold">Prompt:</span> {debug.prompt}
                     </p>
                     <p className="text-sm text-gray-600">
-                      <span className="font-semibold">Response:</span> {debug.response}
+                      <span className="font-semibold">Response:</span>{' '}
+                      {debug.response}
                     </p>
                   </div>
                 ))}
@@ -850,7 +891,6 @@ export default function Dashboard() {
             )}
           </div>
         )}
-    
 
         {/* Save Modal */}
         <SaveModal
@@ -892,6 +932,7 @@ import {
   defaultConsolidationTemplate,
   defaultVariableExtraction
 } from '@/lib/prompts';
+import { getModelConfig } from '@/lib/modelConfig';
 
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
@@ -903,7 +944,22 @@ interface FilePayload {
   blobUrl: string;
 }
 
+
+function estimateTokens(text: string): number {
+  const wordCount = text.split(/\s+/).length;
+  const charCount = text.length;
+  return Math.floor((wordCount * 1.5) + (charCount / 4));
+}
+
+function mergeConsolidatedCompanies(companyLists: CompanyInfo[][]): CompanyInfo[] {
+  // Replace this with your real merging logic if needed.
+  // For now, just flatten all arrays into one.
+  return companyLists.flat();
+}
+
+// ======================
 // Helper to convert ArrayBuffer to base64
+// ======================
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -913,7 +969,9 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+// ======================
 // Helper to decode base64 back to ArrayBuffer
+// ======================
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const len = binary.length;
@@ -926,7 +984,6 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
-  
   const [rawResponses, setRawResponses] = useState<Record<string, { prompt: string; response: string }>>({});
   const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
@@ -945,7 +1002,6 @@ export function useFileProcessing() {
       : defaultConsolidationTemplate;
     return template.replace('{rawData}', JSON.stringify(rawData));
   };
- 
 
   // ======================
   // Build File Tree
@@ -1063,13 +1119,13 @@ export function useFileProcessing() {
   };
 
   // ======================
-  // ANALYZE FILES
+  // ANALYZE FILES (UPDATED WITH CHUNKING)
   // ======================
   const analyzeFiles = async (options: {
-    runSummarization: boolean
-    runInfoRetrieval: boolean
-    summarizationModel?: string
-    infoRetrievalModel?: string
+    runSummarization: boolean;
+    runInfoRetrieval: boolean;
+    summarizationModel?: string;
+    infoRetrievalModel?: string;
   }) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
@@ -1084,6 +1140,9 @@ export function useFileProcessing() {
       const newExtractedTexts: Record<string, string> = {};
       let processedCount = 0;
 
+      // -------------------------
+      // EXTRACT TEXT FROM FILES
+      // -------------------------
       for (const node of allFiles) {
         let extracted = '';
 
@@ -1109,7 +1168,7 @@ export function useFileProcessing() {
             console.error(`Failed to extract text from ${node.name}`, err);
             extracted = '[Error extracting PDF text]';
           }
-        }else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
+        } else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
           try {
             const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
             let excelText = '';
@@ -1126,8 +1185,8 @@ export function useFileProcessing() {
             console.error(`Failed to extract text from ${node.name}`, err);
             extracted = '[Error extracting Excel text]';
           }
-        }
-        else {
+        } else {
+          // Fallback for unsupported file formats
           extracted = '[Text extraction not available for this file type]';
         }
 
@@ -1136,175 +1195,173 @@ export function useFileProcessing() {
         setProcessedFiles(processedCount);
         setProgress(Math.round((processedCount / total) * 100));
       }
+
       setExtractedTexts(newExtractedTexts);
 
-      const textEntries = Object.entries(newExtractedTexts);
-
+      // -------------------------
+      // SUMMARIZATION WITH CHUNKING
+      // -------------------------
       if (options.runSummarization && options.summarizationModel) {
+        setProcessingPhase('summarizing');
+        setProgress(0);
+        setProcessedFiles(0);
 
-      // Phase 2: Summarization
-      setProcessingPhase('summarizing');
-      setProgress(0);
-      setProcessedFiles(0);
+        const newSummaries: Record<string, string> = {};
+        const modelConfig = getModelConfig(options.summarizationModel);
 
-      const newSummaries: Record<string, string> = {};
-      let summaryCount = 0;
-      
+        let count = 0;
+        for (const [fullPath, text] of Object.entries(newExtractedTexts)) {
+          try {
+            const template =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('summarizationTemplate') || defaultSummarizationTemplate
+                : defaultSummarizationTemplate;
 
-      for (const [fullPath, text] of textEntries) {
-        try {
-          const template = typeof window !== 'undefined' 
-          ? localStorage.getItem('summarizationTemplate') || defaultSummarizationTemplate 
-          : defaultSummarizationTemplate;
-        const prompt = template.replace('{documentText}', text);
+            // We'll do a 2-step chunk approach:
+            //   1) Summarize each chunk
+            //   2) If multiple chunks, consolidate
+            const basePrompt = template.replace('{documentText}', '');
+            const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
 
-          if (process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development') {
-            newSummaries[fullPath] = 'Some random text for development purposes...';
-          } else {
-            const res = await fetch('/api/llm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt,
-                history: [],
-                model: options.summarizationModel,
-                requestType: 'summarize',
-              }),
-            });
+            // Split text into smaller chunks that fit the model context window
+            const chunks = splitTextIntoChunks(
+              text,
+              modelConfig.contextWindow - baseTokens - 8000,
+              modelConfig.maxChunkSize
+            );
 
-            if (!res.ok) {
-              console.error('Summary API error:', res.statusText);
-              newSummaries[fullPath] = 'Summary failed: API error';
-            } else {
-              const data = await res.json();
-              let summaryText = data.content;
-              summaryText = summaryText.replace(/```json/gi, '').replace(/```/g, '').trim();
-              newSummaries[fullPath] = summaryText;
-            }
-          }
-        } catch (error) {
-          newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
-        }
+            let fullSummary = '';
+            for (const chunk of chunks) {
+              // Summarize chunk
+              const chunkPrompt = template.replace('{documentText}', chunk);
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: chunkPrompt,
+                  model: options.summarizationModel,
+                  requestType: 'summarize',
+                }),
+              });
 
-        summaryCount++;
-        setProcessedFiles(summaryCount);
-        setProgress(Math.round((summaryCount / textEntries.length) * 100));
-      }
-
-      setSummaries(newSummaries);
-    }
-
-    if (options.runInfoRetrieval && options.infoRetrievalModel) {
-      setProcessingPhase('extracting_companies');
-      setProgress(0);
-      setProcessedFiles(0);
-
-      // We extract first the variables that are present
-
-      let variables  = '';
-
-      for (const [fullPath, text] of textEntries) {
-        const template = typeof window !== 'undefined'
-          ? localStorage.getItem('variableExtraction') || defaultVariableExtraction
-          : defaultVariableExtraction;
-        const variables_prompt = template.replace('{text}', text);
-
-        const res = await fetch('/api/llm', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: variables_prompt,
-            model: options.infoRetrievalModel,
-            format: 'json',
-            requestType: 'extract',
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const cleaned = data.content
-            .replace(/```json\s*/i, '')
-            .replace(/```/g, '')
-            .trim();
-          variables += cleaned;
-        }
-      }
-
-      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
-      let companyCount = 0;
-      
-      for (const [fullPath, text] of textEntries) {
-        try {
-          const template = typeof window !== 'undefined' 
-          ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate 
-          : defaultExtractionTemplate;
-        const extractionPrompt = template
-          .replace('{variables}', variables)
-          .replace('{documentText}', text);
-      
-          if (DEVELOPMENT) {
-            newExtractedCompanies[fullPath] = [{
-              name: 'Example Corp',
-              sector: 'Technology',
-              profits: { '2022': 1500000, '2023': 2000000 },
-              assets: { '2022': 5000000, '2023': 6000000 },
-              years: [2022, 2023]
-            }];
-          } else {
-            const res = await fetch('/api/llm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt: extractionPrompt,
-                model: options.infoRetrievalModel,
-                format: 'json',
-                requestType: 'extract',
-              }),
-            });
-      
-            if (res.ok) {
-              const data = await res.json();
-              const rawResponse = data.content;
-              // Store both the prompt and the raw response for debugging
-              setRawResponses(prev => ({ ...prev, [fullPath]: { prompt: extractionPrompt, response: rawResponse } }));
-      
-              const cleaned = rawResponse
-                .replace(/```json\s*/i, '')
-                .replace(/```/g, '')
-                .trim();
-      
-
-              try {
-                // Expecting an array
-                const companies: CompanyInfo[] = JSON.parse(cleaned);
-                newExtractedCompanies[fullPath] = companies;
-              } catch (e) {
-                console.error('Failed to parse company data:', e);
-                newExtractedCompanies[fullPath] = [];
+              if (res.ok) {
+                const data = await res.json();
+                fullSummary += data.content + '\n\n';
+              } else {
+                // In case of error on one chunk, skip or handle gracefully
+                fullSummary += ' [Chunk Summarization Failed] ';
               }
-            } else {
-              newExtractedCompanies[fullPath] = [];
             }
+
+            // If there was more than one chunk, do a final consolidation
+            if (chunks.length > 1) {
+              const consolidationPrompt = `Please consolidate these partial summaries into one coherent summary:\n\n${fullSummary}`;
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: consolidationPrompt,
+                  model: options.summarizationModel,
+                  requestType: 'summarize',
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                fullSummary = data.content;
+              }
+            }
+
+            newSummaries[fullPath] = fullSummary.trim();
+          } catch (error) {
+            newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
           }
-        } catch (error) {
-          newExtractedCompanies[fullPath] = [];
+
+          count++;
+          setProcessedFiles(count);
+          setProgress(Math.round((count / Object.keys(newExtractedTexts).length) * 100));
         }
-      
-        companyCount++;
-        setProcessedFiles(companyCount);
-        setProgress(Math.round((companyCount / textEntries.length) * 100));
+
+        setSummaries(newSummaries);
       }
-      
-      setExtractedCompanies(newExtractedCompanies);
+
+      // -------------------------
+      // INFO RETRIEVAL WITH CHUNKING
+      // -------------------------
+      if (options.runInfoRetrieval && options.infoRetrievalModel) {
+        setProcessingPhase('extracting_companies');
+        setProgress(0);
+        setProcessedFiles(0);
+
+        const modelConfig = getModelConfig(options.infoRetrievalModel);
+        let count = 0;
+
+        for (const [fullPath, text] of Object.entries(newExtractedTexts)) {
+          try {
+            const template =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate
+                : defaultExtractionTemplate;
+
+            const basePrompt = template.replace('{documentText}', '');
+            const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
+
+            const chunks = splitTextIntoChunks(
+              text,
+              modelConfig.contextWindow - baseTokens - 8000,
+              modelConfig.maxChunkSize
+            );
+
+            let allCompanies: CompanyInfo[] = [];
+            for (const chunk of chunks) {
+              const chunkPrompt = template.replace('{documentText}', chunk);
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: chunkPrompt,
+                  model: options.infoRetrievalModel,
+                  format: 'json',
+                  requestType: 'extract',
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                // The returned text often includes Markdown code fences around JSON
+                const cleaned = data.content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+                try {
+                  const companies: CompanyInfo[] = JSON.parse(cleaned);
+                  // Merge chunk-level results into a single array
+                  allCompanies = mergeConsolidatedCompanies([allCompanies, companies]);
+                } catch (parseErr) {
+                  console.error(`Failed to parse chunk companies for ${fullPath}:`, parseErr);
+                }
+              }
+            }
+
+            // Finally store everything for this file
+            setExtractedCompanies((prev) => ({
+              ...prev,
+              [fullPath]: allCompanies,
+            }));
+          } catch (error) {
+            console.error(`Error processing ${fullPath}:`, error);
+          }
+
+          count++;
+          setProcessedFiles(count);
+          setProgress(Math.round((count / Object.keys(newExtractedTexts).length) * 100));
+        }
+      }
+    } catch (error) {
+      console.error('Processing error:', error);
+    } finally {
+      setIsAnalyzing(false);
+      setProcessingPhase('idle');
     }
-      
-      } catch (error) {
-        console.error('Processing error:', error);
-      } finally {
-        setIsAnalyzing(false);
-        setProcessingPhase('idle');
-      }
-    };
+  };
 
   // ======================
   // SELECT/DESELECT ALL
@@ -1319,8 +1376,10 @@ export function useFileProcessing() {
     setFileTree((prev) => updateNodes(prev));
   };
 
-   // Example snippet after analysis completes OR on "Save Session":
-   const saveHeavyData = async (
+  // ======================
+  // SAVE HEAVY DATA
+  // ======================
+  const saveHeavyData = async (
     sessionId: string,
     heavyData: {
       fileTree: FileNode[];
@@ -1328,18 +1387,18 @@ export function useFileProcessing() {
       summaries: Record<string, string>;
       extractedCompanies: Record<string, CompanyInfo[]>;
       rawResponses: Record<string, { prompt: string; response: string }>;
-      consolidatedCompanies?: ConsolidatedCompany[]; 
+      consolidatedCompanies?: ConsolidatedCompany[];
     }
   ) => {
     try {
-      const res = await fetch('/api/store-heavy-data', {
+      await fetch('/api/store-heavy-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
           heavyData: {
             ...heavyData,
-            consolidatedCompanies: heavyData.consolidatedCompanies || [], // Ensure it's passed
+            consolidatedCompanies: heavyData.consolidatedCompanies || [],
           },
         }),
       });
@@ -1349,29 +1408,95 @@ export function useFileProcessing() {
     }
   };
 
-  return {     fileTree, 
-    setFileTree, 
-    extractedTexts, 
-    setExtractedTexts, 
-    summaries, 
-    setSummaries, 
+  return {
+    fileTree,
+    setFileTree,
+    extractedTexts,
+    setExtractedTexts,
+    summaries,
+    setSummaries,
     isAnalyzing,
-    processingPhase, 
-    progress, 
-    totalFiles, 
-    processedFiles, 
-    processZip, 
-    processFolder, 
-    analyzeFiles, 
-    toggleAllFiles, 
-    getConsolidationPrompt,  // exposed for use in dashboard
-    saveHeavyData, 
-    extractedCompanies, 
+    processingPhase,
+    progress,
+    totalFiles,
+    processedFiles,
+    processZip,
+    processFolder,
+    analyzeFiles,
+    toggleAllFiles,
+    getConsolidationPrompt, // exposed for use in dashboard
+    saveHeavyData,
+    extractedCompanies,
     setExtractedCompanies,
     rawResponses,
     setRawResponses,
-    consolidatedCompanies: [] as ConsolidatedCompany[]
+    // if you're still using it in other places
+    consolidatedCompanies: [] as ConsolidatedCompany[],
   };
+}
+
+// ======================
+// Utility function for chunking text
+// ======================
+function splitTextIntoChunks(
+  text: string,
+  maxTokens: number,
+  maxChunkSize: number
+): string[] {
+  const chunks: string[] = [];
+  let currentChunk = '';
+  let currentTokens = 0;
+
+  // First split by sections using common headings
+  const sections = text.split(/(\n\s*[A-Z][A-Z0-9 ]{10,}\n)/g);
+  
+  let buffer = '';
+  sections.forEach((section, index) => {
+    if (index % 2 === 1) { // It's a heading
+      buffer += section;
+    } else {
+      const sectionWithHeading = buffer + section;
+      buffer = '';
+      
+      // Then split by paragraphs within each section
+      const paragraphs = sectionWithHeading.split('\n\n');
+      
+      paragraphs.forEach(para => {
+        const paraTokens = estimateTokens(para);
+        
+        if (paraTokens > maxTokens) {
+          // Handle very large paragraphs with sentence splitting
+          const sentences = para.split(/[.!?]\s+/g);
+          sentences.forEach(sentence => {
+            const sentenceTokens = estimateTokens(sentence);
+            if (currentTokens + sentenceTokens > maxTokens || 
+                currentChunk.length + sentence.length > maxChunkSize) {
+              chunks.push(currentChunk.trim());
+              currentChunk = '';
+              currentTokens = 0;
+            }
+            currentChunk += sentence + '. ';
+            currentTokens += sentenceTokens;
+          });
+        } else {
+          if (currentTokens + paraTokens > maxTokens || 
+              currentChunk.length + para.length > maxChunkSize) {
+            chunks.push(currentChunk.trim());
+            currentChunk = '';
+            currentTokens = 0;
+          }
+          currentChunk += para + '\n\n';
+          currentTokens += paraTokens;
+        }
+      });
+    }
+  });
+
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks;
 }
 
 ----------------------------------------
@@ -1384,6 +1509,9 @@ File: app\companies\page.tsx
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+import { useRouter } from 'next/navigation';
+import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
+
 
 interface VariableData {
   value?: number | string;
@@ -1400,17 +1528,40 @@ interface ConsolidatedCompany {
 }
 
 export default function CompaniesPage() {
+  const router = useRouter();     // <-- ADD
   const searchParams = useSearchParams();
-  const sessionId = searchParams.get('sessionId');
+  const existingSessionId = searchParams.get('sessionId');
+  
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);   // <-- ADD
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
+ 
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) return; // Not logged in
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.sessions) {
+          setSessions(data.sessions);
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching sessions for Companies page:', err);
+      });
+  }, []);
 
   useEffect(() => {
     const fetchConsolidatedData = async () => {
-      if (!sessionId) return;
+      if (!existingSessionId) {
+        setLoading(false);
+        return;
+      }
       try {
-        const response = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+        const response = await fetch(`/api/store-heavy-data?sessionId=${existingSessionId}`);
         if (!response.ok) throw new Error('Failed to fetch data');
         const data = await response.json();
 
@@ -1427,7 +1578,7 @@ export default function CompaniesPage() {
     };
 
     fetchConsolidatedData();
-  }, [sessionId]);
+  }, [existingSessionId]);
 
   // Add conditional rendering for the "no company data retrieved" message
   if (searchParams.get('message') === 'noData') {
@@ -1539,6 +1690,28 @@ export default function CompaniesPage() {
     <div className="min-h-screen bg-gray-50">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
+         {/* 
+         * Session Selector 
+         */}
+        <div className="mb-4 text-gray-500">
+          <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
+          <select
+            className="border p-2 rounded"
+            value={existingSessionId || ''} // empty if no session chosen
+            onChange={(e) => {
+              const newSessionId = e.target.value;
+              router.push(`/companies?sessionId=${newSessionId}`);
+            }}
+          >
+            <option value="">-- Choose a session --</option>
+            {sessions.map((s) => (
+              <option key={s.session_id} value={s.session_id}>
+                {s.session_name} (ID: {s.session_id})
+              </option>
+            ))}
+          </select>
+        </div>
+
         {renderCompanySection('fund', '#2563eb')}
         {renderCompanySection('company', '#16a34a')}
       </main>
@@ -1682,6 +1855,19 @@ export default function HistoryPage() {
                     className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                   >
                     View Details
+                  </button>
+
+                      {/* NEW "Load Session" button */}
+                  <button
+                    onClick={() => {
+                      // 1) store in local storage
+                      localStorage.setItem('currentSessionId', String(session.session_id));
+                      // 2) push to dashboard
+                      router.push(`/dashboard?sessionId=${session.session_id}`);
+                    }}
+                    className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700"
+                  >
+                    Load Session
                   </button>
 
                   {/* Delete Session (opens our custom modal) */}
@@ -2412,9 +2598,11 @@ export async function GET(request: Request) {
 
 File: app\api\llm\route.tsx
 ----------------------------------------
-// app/api/llm/route.ts
-import { NextResponse } from 'next/server'
+// File: app/api/llm/route.tsx
+import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
+import fs from 'fs';
+import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
@@ -2426,27 +2614,92 @@ interface DeepSeekError {
   };
 }
 
-export async function POST(req: Request) {
-  const body = await req.json();
-  const { prompt, context, history, model, format, requestType } = body || {};
+// -------------
+// NEW HELPER: logLLMCall
+// -------------
+function logLLMCall({
+  prompt,
+  model,
+  requestType,
+  userId,
+  response,
+  error,
+}: {
+  prompt: string;
+  model: string;
+  requestType: string;
+  userId: string | null;
+  response?: string;
+  error?: string;
+}) {
+  try {
+    const logsDir = path.join(process.cwd(), 'logs'); 
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir);
+    }
+    const logFile = path.join(logsDir, 'llm-logs.txt');
 
-  if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: "Invalid prompt" }, { status: 300 });
+    const timestamp = new Date().toISOString();
+    let logEntry = `\n[${timestamp}] MODEL: ${model}, USER: ${userId ?? 'Unknown'}, REQUEST_TYPE: ${requestType}\n`;
+    logEntry += `Prompt:\n${prompt}\n`;
+
+    if (response) {
+      logEntry += `Response:\n${response}\n`;
+    }
+    if (error) {
+      logEntry += `Error:\n${error}\n`;
+    }
+    logEntry += '\n-----------------------------------------------------\n';
+
+    // Append sync or async are both valid. Sync is simpler but can block; 
+    // for small logs, it usually won't be an issue:
+    fs.appendFileSync(logFile, logEntry, 'utf8');
+  } catch (err) {
+    console.error('Failed to write LLM call log:', err);
+  }
+}
+
+export async function POST(req: Request) {
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch (error) {
+    // If the request body is invalid JSON, return 400
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
-  const userId = req.headers.get('x-user-id');
+  const { prompt, context, history, model, format, requestType } = body || {};
+  if (!prompt || typeof prompt !== 'string') {
+    return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
+  }
 
+  const userId = req.headers.get('x-user-id');
+  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
+  // -------------
+  // For local dev/test: Mock response quickly
+  // -------------
   if (DEVELOPMENT) {
+    // Log the call in dev mode anyway
+    logLLMCall({
+      prompt,
+      model: model || 'no-model',
+      requestType: requestType || 'unknown',
+      userId,
+      response: '[MOCKED] No actual LLM call made',
+    });
+
     await new Promise(res => setTimeout(res, 500));
     return NextResponse.json({
       content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
-      tokensUsed: 42
+      tokensUsed: 42,
     });
   }
 
+  // -------------
+  // Actual LLM call
+  // -------------
   try {
-    
     if (model?.startsWith('deepseek:')) {
       const deepseekKey = process.env.DEEPSEEK_API_KEY;
       if (!deepseekKey) {
@@ -2461,7 +2714,7 @@ export async function POST(req: Request) {
       const messages = [
         { role: 'system', content: context || 'You are a helpful assistant.' },
         ...(Array.isArray(history) ? history : []),
-        { role: 'user', content: prompt }
+        { role: 'user', content: prompt },
       ];
 
       const requestPayload = {
@@ -2470,7 +2723,8 @@ export async function POST(req: Request) {
         temperature: 0.0,
         max_tokens: 8000,
         stream: false,
-        //response_format: format === 'json' ? { type: 'json_object' } : undefined
+        // For "json" format, you'd generally let the system or user instructions 
+        // shape the output. (DeepSeek doesn't use `response_format` like OpenAI)
       };
 
       const startTime = Date.now();
@@ -2478,21 +2732,26 @@ export async function POST(req: Request) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${deepseekKey}`
+          Authorization: `Bearer ${deepseekKey}`,
         },
-        body: JSON.stringify(requestPayload)
+        body: JSON.stringify(requestPayload),
       });
-
       const responseTime = Date.now() - startTime;
       const responseText = await response.text();
-      
-      
 
       if (!response.ok) {
         console.error('DeepSeek API Error Details:', {
           status: response.status,
           headers: Object.fromEntries(response.headers.entries()),
-          body: responseText
+          body: responseText,
+        });
+        // Log the failed call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
         });
         return NextResponse.json(
           { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
@@ -2500,73 +2759,77 @@ export async function POST(req: Request) {
         );
       }
 
+      // Now attempt to parse the JSON
       try {
-        if (requestType === 'consolidation') {
-        console.log('Consolidation Response:', responseText);
-        }
-
         const data = JSON.parse(responseText);
-
         let content = '';
 
-        if (requestType === 'consolidation') {
-          const rawContent = data.choices[0].message.content;
-          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
-          
-          // Validate basic structure
-          if (!content.startsWith('[') || !content.endsWith(']')) {
-            console.error('Invalid consolidation structure:', content);
-            content = '[]'; // Return empty array as fallback
-          }
-        }
-
-        if (requestType === 'summarize') {
-          // For summaries, use the message content directly
-          content = data.choices[0].message.content;
-        } else if (requestType === 'consolidation' || requestType === 'extract') {
-           // For structured data, clean JSON formatting
-          const rawContent = data.choices[0].message.content;
+        if (requestType === 'consolidation' || requestType === 'extract') {
+          // For structured data
+          const rawContent = data.choices?.[0]?.message?.content || '';
           content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
         } else {
-          content = data.choices[0].message.content;
+          // Summaries, chat, etc.
+          content = data.choices?.[0]?.message?.content || '';
         }
 
+        // Log the successful call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          response: content,
+        });
+
         return NextResponse.json({
-          content: content,
-          tokensUsed: data.usage?.total_tokens || 0
+          content,
+          tokensUsed: data.usage?.total_tokens || 0,
+          responseTime,
         });
       } catch (parseError) {
-        if (requestType === 'summarize') {
-          return NextResponse.json({
-            content: responseText, // Return raw text if JSON parse fails
-            tokensUsed: 0
-          });
-        }
-        console.error('Response JSON Parse Error:', parseError);
+        // If parse fails, log the error but return the raw text
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `Response JSON Parse Error: ${String(parseError)}`,
+          response: responseText,
+        });
         return NextResponse.json(
-          { error: 'Failed to parse API response', response: responseText },
+          {
+            error: 'Failed to parse API response',
+            response: responseText,
+          },
           { status: 500 }
         );
       }
     }
 
-    if (model?.startsWith('openai:')) {
-      // commented for now
-    }
+    // If we eventually supported openai: or other, handle here...
+    return NextResponse.json({ error: 'Unsupported model provider' }, { status: 400 });
+  } catch (error: any) {
+    // Log any top-level error
+    logLLMCall({
+      prompt,
+      model: model || 'unknown',
+      requestType: requestType || 'unknown',
+      userId,
+      error: String(error),
+    });
 
-    return NextResponse.json(
-      { error: 'Unsupported model provider' },
-      { status: 400 }
-    );
-
-  } catch (error) {
     console.error('LLM Processing Error:', error);
     return NextResponse.json(
-      { error: 'LLM processing failed', details: error instanceof Error ? error.message : String(error) },
+      {
+        error: 'LLM processing failed',
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
 }
+
 ----------------------------------------
 
 File: app\api\search\route.tsx

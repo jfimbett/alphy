@@ -13,6 +13,7 @@ import {
   defaultConsolidationTemplate,
   defaultVariableExtraction
 } from '@/lib/prompts';
+import { getModelConfig } from '@/lib/modelConfig';
 
 GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
@@ -24,7 +25,22 @@ interface FilePayload {
   blobUrl: string;
 }
 
+
+function estimateTokens(text: string): number {
+  const wordCount = text.split(/\s+/).length;
+  const charCount = text.length;
+  return Math.floor((wordCount * 1.5) + (charCount / 4));
+}
+
+function mergeConsolidatedCompanies(companyLists: CompanyInfo[][]): CompanyInfo[] {
+  // Replace this with your real merging logic if needed.
+  // For now, just flatten all arrays into one.
+  return companyLists.flat();
+}
+
+// ======================
 // Helper to convert ArrayBuffer to base64
+// ======================
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -34,7 +50,9 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+// ======================
 // Helper to decode base64 back to ArrayBuffer
+// ======================
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const len = binary.length;
@@ -47,7 +65,6 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export function useFileProcessing() {
-  
   const [rawResponses, setRawResponses] = useState<Record<string, { prompt: string; response: string }>>({});
   const [extractedCompanies, setExtractedCompanies] = useState<Record<string, CompanyInfo[]>>({});
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
@@ -66,7 +83,6 @@ export function useFileProcessing() {
       : defaultConsolidationTemplate;
     return template.replace('{rawData}', JSON.stringify(rawData));
   };
- 
 
   // ======================
   // Build File Tree
@@ -184,13 +200,13 @@ export function useFileProcessing() {
   };
 
   // ======================
-  // ANALYZE FILES
+  // ANALYZE FILES (UPDATED WITH CHUNKING)
   // ======================
   const analyzeFiles = async (options: {
-    runSummarization: boolean
-    runInfoRetrieval: boolean
-    summarizationModel?: string
-    infoRetrievalModel?: string
+    runSummarization: boolean;
+    runInfoRetrieval: boolean;
+    summarizationModel?: string;
+    infoRetrievalModel?: string;
   }) => {
     try {
       const allFiles = getAllFiles(fileTree).filter((f) => f.selected);
@@ -205,6 +221,9 @@ export function useFileProcessing() {
       const newExtractedTexts: Record<string, string> = {};
       let processedCount = 0;
 
+      // -------------------------
+      // EXTRACT TEXT FROM FILES
+      // -------------------------
       for (const node of allFiles) {
         let extracted = '';
 
@@ -230,7 +249,7 @@ export function useFileProcessing() {
             console.error(`Failed to extract text from ${node.name}`, err);
             extracted = '[Error extracting PDF text]';
           }
-        }else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
+        } else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
           try {
             const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
             let excelText = '';
@@ -247,8 +266,8 @@ export function useFileProcessing() {
             console.error(`Failed to extract text from ${node.name}`, err);
             extracted = '[Error extracting Excel text]';
           }
-        }
-        else {
+        } else {
+          // Fallback for unsupported file formats
           extracted = '[Text extraction not available for this file type]';
         }
 
@@ -257,175 +276,173 @@ export function useFileProcessing() {
         setProcessedFiles(processedCount);
         setProgress(Math.round((processedCount / total) * 100));
       }
+
       setExtractedTexts(newExtractedTexts);
 
-      const textEntries = Object.entries(newExtractedTexts);
-
+      // -------------------------
+      // SUMMARIZATION WITH CHUNKING
+      // -------------------------
       if (options.runSummarization && options.summarizationModel) {
+        setProcessingPhase('summarizing');
+        setProgress(0);
+        setProcessedFiles(0);
 
-      // Phase 2: Summarization
-      setProcessingPhase('summarizing');
-      setProgress(0);
-      setProcessedFiles(0);
+        const newSummaries: Record<string, string> = {};
+        const modelConfig = getModelConfig(options.summarizationModel);
 
-      const newSummaries: Record<string, string> = {};
-      let summaryCount = 0;
-      
+        let count = 0;
+        for (const [fullPath, text] of Object.entries(newExtractedTexts)) {
+          try {
+            const template =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('summarizationTemplate') || defaultSummarizationTemplate
+                : defaultSummarizationTemplate;
 
-      for (const [fullPath, text] of textEntries) {
-        try {
-          const template = typeof window !== 'undefined' 
-          ? localStorage.getItem('summarizationTemplate') || defaultSummarizationTemplate 
-          : defaultSummarizationTemplate;
-        const prompt = template.replace('{documentText}', text);
+            // We'll do a 2-step chunk approach:
+            //   1) Summarize each chunk
+            //   2) If multiple chunks, consolidate
+            const basePrompt = template.replace('{documentText}', '');
+            const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
 
-          if (process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development') {
-            newSummaries[fullPath] = 'Some random text for development purposes...';
-          } else {
-            const res = await fetch('/api/llm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt,
-                history: [],
-                model: options.summarizationModel,
-                requestType: 'summarize',
-              }),
-            });
+            // Split text into smaller chunks that fit the model context window
+            const chunks = splitTextIntoChunks(
+              text,
+              modelConfig.contextWindow - baseTokens - 8000,
+              modelConfig.maxChunkSize
+            );
 
-            if (!res.ok) {
-              console.error('Summary API error:', res.statusText);
-              newSummaries[fullPath] = 'Summary failed: API error';
-            } else {
-              const data = await res.json();
-              let summaryText = data.content;
-              summaryText = summaryText.replace(/```json/gi, '').replace(/```/g, '').trim();
-              newSummaries[fullPath] = summaryText;
-            }
-          }
-        } catch (error) {
-          newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
-        }
+            let fullSummary = '';
+            for (const chunk of chunks) {
+              // Summarize chunk
+              const chunkPrompt = template.replace('{documentText}', chunk);
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: chunkPrompt,
+                  model: options.summarizationModel,
+                  requestType: 'summarize',
+                }),
+              });
 
-        summaryCount++;
-        setProcessedFiles(summaryCount);
-        setProgress(Math.round((summaryCount / textEntries.length) * 100));
-      }
-
-      setSummaries(newSummaries);
-    }
-
-    if (options.runInfoRetrieval && options.infoRetrievalModel) {
-      setProcessingPhase('extracting_companies');
-      setProgress(0);
-      setProcessedFiles(0);
-
-      // We extract first the variables that are present
-
-      let variables  = '';
-
-      for (const [fullPath, text] of textEntries) {
-        const template = typeof window !== 'undefined'
-          ? localStorage.getItem('variableExtraction') || defaultVariableExtraction
-          : defaultVariableExtraction;
-        const variables_prompt = template.replace('{text}', text);
-
-        const res = await fetch('/api/llm', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: variables_prompt,
-            model: options.infoRetrievalModel,
-            format: 'json',
-            requestType: 'extract',
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const cleaned = data.content
-            .replace(/```json\s*/i, '')
-            .replace(/```/g, '')
-            .trim();
-          variables += cleaned;
-        }
-      }
-
-      const newExtractedCompanies: Record<string, CompanyInfo[]> = {};
-      let companyCount = 0;
-      
-      for (const [fullPath, text] of textEntries) {
-        try {
-          const template = typeof window !== 'undefined' 
-          ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate 
-          : defaultExtractionTemplate;
-        const extractionPrompt = template
-          .replace('{variables}', variables)
-          .replace('{documentText}', text);
-      
-          if (DEVELOPMENT) {
-            newExtractedCompanies[fullPath] = [{
-              name: 'Example Corp',
-              sector: 'Technology',
-              profits: { '2022': 1500000, '2023': 2000000 },
-              assets: { '2022': 5000000, '2023': 6000000 },
-              years: [2022, 2023]
-            }];
-          } else {
-            const res = await fetch('/api/llm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt: extractionPrompt,
-                model: options.infoRetrievalModel,
-                format: 'json',
-                requestType: 'extract',
-              }),
-            });
-      
-            if (res.ok) {
-              const data = await res.json();
-              const rawResponse = data.content;
-              // Store both the prompt and the raw response for debugging
-              setRawResponses(prev => ({ ...prev, [fullPath]: { prompt: extractionPrompt, response: rawResponse } }));
-      
-              const cleaned = rawResponse
-                .replace(/```json\s*/i, '')
-                .replace(/```/g, '')
-                .trim();
-      
-
-              try {
-                // Expecting an array
-                const companies: CompanyInfo[] = JSON.parse(cleaned);
-                newExtractedCompanies[fullPath] = companies;
-              } catch (e) {
-                console.error('Failed to parse company data:', e);
-                newExtractedCompanies[fullPath] = [];
+              if (res.ok) {
+                const data = await res.json();
+                fullSummary += data.content + '\n\n';
+              } else {
+                // In case of error on one chunk, skip or handle gracefully
+                fullSummary += ' [Chunk Summarization Failed] ';
               }
-            } else {
-              newExtractedCompanies[fullPath] = [];
             }
+
+            // If there was more than one chunk, do a final consolidation
+            if (chunks.length > 1) {
+              const consolidationPrompt = `Please consolidate these partial summaries into one coherent summary:\n\n${fullSummary}`;
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: consolidationPrompt,
+                  model: options.summarizationModel,
+                  requestType: 'summarize',
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                fullSummary = data.content;
+              }
+            }
+
+            newSummaries[fullPath] = fullSummary.trim();
+          } catch (error) {
+            newSummaries[fullPath] = `Summary failed: ${(error as Error).message}`;
           }
-        } catch (error) {
-          newExtractedCompanies[fullPath] = [];
+
+          count++;
+          setProcessedFiles(count);
+          setProgress(Math.round((count / Object.keys(newExtractedTexts).length) * 100));
         }
-      
-        companyCount++;
-        setProcessedFiles(companyCount);
-        setProgress(Math.round((companyCount / textEntries.length) * 100));
+
+        setSummaries(newSummaries);
       }
-      
-      setExtractedCompanies(newExtractedCompanies);
+
+      // -------------------------
+      // INFO RETRIEVAL WITH CHUNKING
+      // -------------------------
+      if (options.runInfoRetrieval && options.infoRetrievalModel) {
+        setProcessingPhase('extracting_companies');
+        setProgress(0);
+        setProcessedFiles(0);
+
+        const modelConfig = getModelConfig(options.infoRetrievalModel);
+        let count = 0;
+
+        for (const [fullPath, text] of Object.entries(newExtractedTexts)) {
+          try {
+            const template =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate
+                : defaultExtractionTemplate;
+
+            const basePrompt = template.replace('{documentText}', '');
+            const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
+
+            const chunks = splitTextIntoChunks(
+              text,
+              modelConfig.contextWindow - baseTokens - 8000,
+              modelConfig.maxChunkSize
+            );
+
+            let allCompanies: CompanyInfo[] = [];
+            for (const chunk of chunks) {
+              const chunkPrompt = template.replace('{documentText}', chunk);
+              const res = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: chunkPrompt,
+                  model: options.infoRetrievalModel,
+                  format: 'json',
+                  requestType: 'extract',
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                // The returned text often includes Markdown code fences around JSON
+                const cleaned = data.content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+                try {
+                  const companies: CompanyInfo[] = JSON.parse(cleaned);
+                  // Merge chunk-level results into a single array
+                  allCompanies = mergeConsolidatedCompanies([allCompanies, companies]);
+                } catch (parseErr) {
+                  console.error(`Failed to parse chunk companies for ${fullPath}:`, parseErr);
+                }
+              }
+            }
+
+            // Finally store everything for this file
+            setExtractedCompanies((prev) => ({
+              ...prev,
+              [fullPath]: allCompanies,
+            }));
+          } catch (error) {
+            console.error(`Error processing ${fullPath}:`, error);
+          }
+
+          count++;
+          setProcessedFiles(count);
+          setProgress(Math.round((count / Object.keys(newExtractedTexts).length) * 100));
+        }
+      }
+    } catch (error) {
+      console.error('Processing error:', error);
+    } finally {
+      setIsAnalyzing(false);
+      setProcessingPhase('idle');
     }
-      
-      } catch (error) {
-        console.error('Processing error:', error);
-      } finally {
-        setIsAnalyzing(false);
-        setProcessingPhase('idle');
-      }
-    };
+  };
 
   // ======================
   // SELECT/DESELECT ALL
@@ -440,8 +457,10 @@ export function useFileProcessing() {
     setFileTree((prev) => updateNodes(prev));
   };
 
-   // Example snippet after analysis completes OR on "Save Session":
-   const saveHeavyData = async (
+  // ======================
+  // SAVE HEAVY DATA
+  // ======================
+  const saveHeavyData = async (
     sessionId: string,
     heavyData: {
       fileTree: FileNode[];
@@ -449,18 +468,18 @@ export function useFileProcessing() {
       summaries: Record<string, string>;
       extractedCompanies: Record<string, CompanyInfo[]>;
       rawResponses: Record<string, { prompt: string; response: string }>;
-      consolidatedCompanies?: ConsolidatedCompany[]; 
+      consolidatedCompanies?: ConsolidatedCompany[];
     }
   ) => {
     try {
-      const res = await fetch('/api/store-heavy-data', {
+      await fetch('/api/store-heavy-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
           heavyData: {
             ...heavyData,
-            consolidatedCompanies: heavyData.consolidatedCompanies || [], // Ensure it's passed
+            consolidatedCompanies: heavyData.consolidatedCompanies || [],
           },
         }),
       });
@@ -470,27 +489,93 @@ export function useFileProcessing() {
     }
   };
 
-  return {     fileTree, 
-    setFileTree, 
-    extractedTexts, 
-    setExtractedTexts, 
-    summaries, 
-    setSummaries, 
+  return {
+    fileTree,
+    setFileTree,
+    extractedTexts,
+    setExtractedTexts,
+    summaries,
+    setSummaries,
     isAnalyzing,
-    processingPhase, 
-    progress, 
-    totalFiles, 
-    processedFiles, 
-    processZip, 
-    processFolder, 
-    analyzeFiles, 
-    toggleAllFiles, 
-    getConsolidationPrompt,  // exposed for use in dashboard
-    saveHeavyData, 
-    extractedCompanies, 
+    processingPhase,
+    progress,
+    totalFiles,
+    processedFiles,
+    processZip,
+    processFolder,
+    analyzeFiles,
+    toggleAllFiles,
+    getConsolidationPrompt, // exposed for use in dashboard
+    saveHeavyData,
+    extractedCompanies,
     setExtractedCompanies,
     rawResponses,
     setRawResponses,
-    consolidatedCompanies: [] as ConsolidatedCompany[]
+    // if you're still using it in other places
+    consolidatedCompanies: [] as ConsolidatedCompany[],
   };
+}
+
+// ======================
+// Utility function for chunking text
+// ======================
+function splitTextIntoChunks(
+  text: string,
+  maxTokens: number,
+  maxChunkSize: number
+): string[] {
+  const chunks: string[] = [];
+  let currentChunk = '';
+  let currentTokens = 0;
+
+  // First split by sections using common headings
+  const sections = text.split(/(\n\s*[A-Z][A-Z0-9 ]{10,}\n)/g);
+  
+  let buffer = '';
+  sections.forEach((section, index) => {
+    if (index % 2 === 1) { // It's a heading
+      buffer += section;
+    } else {
+      const sectionWithHeading = buffer + section;
+      buffer = '';
+      
+      // Then split by paragraphs within each section
+      const paragraphs = sectionWithHeading.split('\n\n');
+      
+      paragraphs.forEach(para => {
+        const paraTokens = estimateTokens(para);
+        
+        if (paraTokens > maxTokens) {
+          // Handle very large paragraphs with sentence splitting
+          const sentences = para.split(/[.!?]\s+/g);
+          sentences.forEach(sentence => {
+            const sentenceTokens = estimateTokens(sentence);
+            if (currentTokens + sentenceTokens > maxTokens || 
+                currentChunk.length + sentence.length > maxChunkSize) {
+              chunks.push(currentChunk.trim());
+              currentChunk = '';
+              currentTokens = 0;
+            }
+            currentChunk += sentence + '. ';
+            currentTokens += sentenceTokens;
+          });
+        } else {
+          if (currentTokens + paraTokens > maxTokens || 
+              currentChunk.length + para.length > maxChunkSize) {
+            chunks.push(currentChunk.trim());
+            currentChunk = '';
+            currentTokens = 0;
+          }
+          currentChunk += para + '\n\n';
+          currentTokens += paraTokens;
+        }
+      });
+    }
+  });
+
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks;
 }
