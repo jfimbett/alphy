@@ -12,14 +12,8 @@ import ModelSelector from '@/components/dashboard/ModelSelector';
 import FileAnalysisButtons from '@/components/dashboard/FileAnalysisProgress';
 import SaveModal from '@/components/dashboard/SaveSessionModal';
 import LoadModal from '@/components/dashboard/LoadSessionModal';
-import FileUploadArea from '@/components/dashboard/FileUploadArea'; // We'll use this now
-
-// Hooks
-import { useFileProcessing } from './useFileProcessing';
-import { useChat } from './useChat';
-
-// Utility
-import { addBase64ToTree, convertTree } from './utils/fileTreeHelpers';
+import FileUploadArea from '@/components/dashboard/FileUploadArea'; 
+import { ConsolidatedCompany } from '../types';
 
 // Icons (optional usage)
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
@@ -31,336 +25,62 @@ import Navbar from '@/components/Navbar';
 
 import { getModelConfig } from '@/lib/modelConfig';
 
-/**
- * ---------------------------------------------------
- * Helper Functions
- * ---------------------------------------------------
- */
+import JSZip from 'jszip';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import * as XLSX from 'xlsx';
 
-// Token estimation with optional GPT-3 encoder
-const estimateTokens = (text: string): number => {
-  // Simple heuristic (1 token ≈ 4 characters)
-  const heuristicEstimate = Math.ceil(text.length / 4);
+import { CompanyInfo } from '@/app/types';
 
-  // For better accuracy, you could use a tokenizer library like `gpt-3-encoder`:
-  // const { encode } = require('gpt-3-encoder');
-  // return encode(text).length;
+import { defaultSummarizationTemplate, defaultExtractionTemplate, defaultConsolidationTemplate, defaultVariableExtraction} from '@/lib/prompts';
 
-  return heuristicEstimate;
-};
+import  {estimateTokens, mergeConsolidatedCompanies, arrayBufferToBase64, base64ToArrayBuffer, FilePayload}  from '@/app/dashboard/utils/utils';
+GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
+const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'development';
 
-// Merges multiple arrays (or a single array) of companies by name
-const mergeConsolidatedCompanies = (companiesArray: any[]) => {
-  const companyMap = new Map<string, any>();
+import {getConsolidationPrompt, buildFileTree, getAllFiles, processZip, processFolder, 
+  toggleAllFiles, handleConsolidateCompanies, addBase64ToTree, convertTree, handleFileSelect, handleLoadClick, openSaveModal, closeSaveModal,
+  handleSaveConfirm, confirmLoadSession,
+  analyzeFiles, saveHeavyData, saveSession, ExistingUpload} from '@/app/dashboard/utils/utils';
 
-  companiesArray.flat().forEach((company) => {
-    if (!company?.name) return; // Skip invalid entries
-
-    const existing = companyMap.get(company.name);
-    const newCompany = deepClone(company);
-
-    // First occurrence
-    if (!existing) {
-      companyMap.set(company.name, newCompany);
-      return;
-    }
-
-    // Merge numerical values
-    Object.entries(newCompany.variables).forEach(([key, value]) => {
-      if (typeof value === 'number') {
-        existing.variables[key] = (existing.variables[key] || 0) + value;
-      } else if (value instanceof Date) {
-        existing.variables[key] =
-          value > existing.variables[key] ? value : existing.variables[key];
-      } else {
-        existing.variables[key] = value || existing.variables[key];
-      }
-    });
-
-    // Merge dates
-    existing.dates = Array.from(
-      new Set([...existing.dates, ...newCompany.dates])
-    ).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-
-    // Merge other fields
-    existing.lastUpdated = [existing.lastUpdated, newCompany.lastUpdated]
-      .filter(Boolean)
-      .sort()
-      .pop();
-  });
-
-  return Array.from(companyMap.values());
-};
-
-// Deep clone helper
-const deepClone = (obj: any) => JSON.parse(JSON.stringify(obj));
-
-// Deep merge helper
-const deepMerge = (target: any, source: any) => {
-  Object.keys(source).forEach((key) => {
-    if (source[key] instanceof Object && key in target) {
-      Object.assign(source[key], deepMerge(target[key], source[key]));
-    }
-  });
-  return Object.assign(target, source);
-};
-
-type ExistingUpload = {
-  upload_id: number;
-  upload_name: string;
-};
 
 export default function Dashboard() {
-  const router = useRouter();
-  const formRef = useRef<HTMLFormElement | null>(null);
+  const router                                                      = useRouter();
+  const formRef                                                     = useRef<HTMLFormElement | null>(null);
+  const [rawResponses, setRawResponses]                             = useState<Record<string, { prompt: string; response: string }>>({});
+  const [extractedCompanies, setExtractedCompanies]                 = useState<Record<string, CompanyInfo[]>>({});
+  const [fileTree, setFileTree]                                     = useState<FileNode[]>([]);
+  const [extractedTexts, setExtractedTexts]                         = useState<Record<string, string>>({});
+  const [summaries, setSummaries]                                   = useState<Record<string, string>>({});
+  const [isAnalyzing, setIsAnalyzing]                               = useState(false);
+  const [processingPhase, setProcessingPhase]                       = useState<'extracting' | 'summarizing' | 'idle' | 'extracting_companies'>('idle');
+  const [progress, setProgress]                                     = useState(0);
+  const [totalFiles, setTotalFiles]                                 = useState(0);
+  const [processedFiles, setProcessedFiles]                         = useState(0);
+  const [selectedSummarizationModel, setSelectedSummarizationModel] = useState('deepseek:deepseek-chat');
+  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] = useState('deepseek:deepseek-reasoner');
+  const [runSummarization, setRunSummarization]                     = useState(true);
+  const [runInfoRetrieval, setRunInfoRetrieval]                     = useState(true);
+  const [currentZipName, setCurrentZipName]                         = useState<string | null>(null);
+  const [highlightedFiles, setHighlightedFiles]                     = useState<Set<string>>(new Set());
+  const [showExtracted, setShowExtracted]                           = useState(false);
+  const [allSelected, setAllSelected]                               = useState(true);
+  const [currentSessionId, setCurrentSessionId]                     = useState<string | null>(null);
+  const [selectedFile, setSelectedFile]                             = useState<FileNode | null>(null);
+  const [successMessage, setSuccessMessage]                         = useState('');
+  const [showSaveModal, setShowSaveModal]                           = useState(false);
+  const [existingUploads, setExistingUploads]                       = useState<ExistingUpload[]>([]);
+  const [selectedUploadOption, setSelectedUploadOption]             = useState<'new' | 'existing'>('new');
+  const [newUploadName, setNewUploadName]                           = useState('');
+  const [existingUploadId, setExistingUploadId]                     = useState<number | null>(null);
+  const [fetchingUploads, setFetchingUploads]                       = useState(false);
+  const [showLoadModal, setShowLoadModal]                           = useState(false);
+  const [availableSessions, setAvailableSessions]                   = useState<SessionSummary[]>([]);
+  const [isConsolidating, setIsConsolidating]                       = useState(false);
+  const [llmConsolidationDebug, setLlmConsolidationDebug]           = useState<{ prompt: string; response: string }[]>([]);
+  const [showDebug, setShowDebug]                                   = useState(false);
 
-  // ---------------------------
-  // State for File Processing
-  // ---------------------------
-  const {
-    fileTree,
-    setFileTree,
-    extractedTexts,
-    setExtractedTexts,
-    summaries,
-    setSummaries,
-    extractedCompanies,
-    rawResponses,
-    setRawResponses,
-    isAnalyzing,
-    processingPhase,
-    progress,
-    totalFiles,
-    processedFiles,
-    processZip,
-    processFolder,
-    analyzeFiles,
-    toggleAllFiles,
-    saveHeavyData,
-    getConsolidationPrompt,
-    consolidatedCompanies,
-  } = useFileProcessing();
+  
 
-  // ---------------------------
-  // State for Chat
-  // ---------------------------
-  const {
-    contextType,
-    setContextType,
-    chatMessage,
-    setChatMessage,
-    chatHistory,
-    setChatHistory,
-    isChatLoading,
-    handleChatSubmit,
-  } = useChat();
-
-  // Models chosen by user
-  const [selectedSummarizationModel, setSelectedSummarizationModel] =
-    useState('deepseek:deepseek-chat');
-  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] =
-    useState('deepseek:deepseek-reasoner');
-
-  // Toggles to run Summarization / Info Retrieval
-  const [runSummarization, setRunSummarization] = useState(true);
-  const [runInfoRetrieval, setRunInfoRetrieval] = useState(true);
-
-  // UI states
-  const [currentZipName, setCurrentZipName] = useState<string | null>(null);
-  const [highlightedFiles, setHighlightedFiles] = useState<Set<string>>(
-    new Set()
-  );
-  const [showExtracted, setShowExtracted] = useState(false);
-  const [allSelected, setAllSelected] = useState(true);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
-  const [successMessage, setSuccessMessage] = useState('');
-  const [showSaveModal, setShowSaveModal] = useState(false);
-  const [existingUploads, setExistingUploads] = useState<ExistingUpload[]>([]);
-  const [selectedUploadOption, setSelectedUploadOption] =
-    useState<'new' | 'existing'>('new');
-  const [newUploadName, setNewUploadName] = useState('');
-  const [existingUploadId, setExistingUploadId] = useState<number | null>(null);
-  const [fetchingUploads, setFetchingUploads] = useState(false);
-  const [showLoadModal, setShowLoadModal] = useState(false);
-  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>(
-    []
-  );
-  const [isConsolidating, setIsConsolidating] = useState(false);
-
-  // Debug info for LLM consolidation
-  const [llmConsolidationDebug, setLlmConsolidationDebug] = useState<
-    { prompt: string; response: string }[]
-  >([]);
-
-  // Toggle debug info
-  const [showDebug, setShowDebug] = useState(false);
-
-  /**
-   * ---------------------------------------------------
-   * Consolidate Companies with Chunking
-   * ---------------------------------------------------
-   */
-  const handleConsolidateCompanies = async (sessionId: string) => {
-    setIsConsolidating(true);
-    try {
-      // 1) Grab the model config (contextWindow, tokenSafetyMargin, etc.)
-      const modelConfig = getModelConfig(selectedInfoRetrievalModel);
-
-      // 2) Flatten all extracted companies across files
-      const allCompanies = Object.values(extractedCompanies).flat();
-
-      // 3) We'll define MAX_TOKENS as the model's contextWindow
-      const MAX_TOKENS = modelConfig.contextWindow;
-
-      // 4) Prepare chunking logic
-      const chunks: any[][] = [];
-      let currentChunk: any[] = [];
-      let currentTokens = 0;
-
-      // The basePrompt is the consolidation template with an empty array,
-      // so we see how many tokens are "overhead."
-      const basePrompt = getConsolidationPrompt([]);
-     
-      const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
-      const availableTokensPerChunk = MAX_TOKENS - baseTokens - 8000; // Reserve 8000 tokens for completion
-
-      for (const company of allCompanies) {
-        const companyText = JSON.stringify(company);
-        // The snippet uses a +50 "safety offset" for each company
-        const entryTokens = estimateTokens(companyText) + 50;
-
-        // Validate single company size: if it alone exceeds context, skip or handle differently
-        if (entryTokens > availableTokensPerChunk) {
-          console.error('Oversized company:', company.name);
-          continue;
-        }
-
-        // Start a new chunk if adding this company would exceed the limit
-        if (currentTokens + entryTokens > availableTokensPerChunk) {
-          chunks.push(currentChunk);
-          currentChunk = [];
-          currentTokens = 0;
-        }
-
-        currentChunk.push(company);
-        currentTokens += entryTokens;
-      }
-
-      // If anything remains in currentChunk, push it
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk);
-      }
-
-      // 5) Process each chunk with fetch, plus optional retry logic
-      const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-      const MAX_RETRIES = 2;
-
-      const processChunk = async (chunk: any[], attempt = 0): Promise<any[]> => {
-        try {
-          const chunkPrompt = getConsolidationPrompt(chunk);
-          const res = await fetch('/api/llm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: chunkPrompt,
-              model: selectedInfoRetrievalModel,
-              format: 'json',
-              requestType: 'consolidation',
-            }),
-          });
-
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-          const { content } = await res.json();
-          const cleanedContent = content
-            .replace(/```json/g, '')
-            .replace(/```/g, '')
-            .trim();
-
-          // Validate JSON structure
-          const parsed = JSON.parse(cleanedContent);
-          if (!Array.isArray(parsed)) {
-            throw new Error('Invalid response format - expected array');
-          }
-
-          // Validate minimum company fields
-          const validCompanies = parsed.filter(
-            (c) =>
-              c?.name && c?.type && c?.variables && typeof c.variables === 'object'
-          );
-
-          // Keep track of prompt/response for debugging
-          consolidationDebug.push({
-            prompt: chunkPrompt,
-            response: JSON.stringify(validCompanies),
-          });
-
-          return validCompanies;
-        } catch (error) {
-          // If it fails, we try up to MAX_RETRIES times
-          if (attempt < MAX_RETRIES) {
-            await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-            return processChunk(chunk, attempt + 1);
-          }
-          console.error('Chunk processing failed after retries:', error);
-          return [];
-        }
-      };
-
-      // 6) Go chunk-by-chunk, building the consolidated results
-      let consolidatedResults: any[] = [];
-      for (const chunk of chunks) {
-        const chunkResults = await processChunk(chunk);
-        consolidatedResults = mergeConsolidatedCompanies([
-          ...consolidatedResults,
-          ...chunkResults,
-        ]);
-      }
-
-      // 7) Final check: if no results, error out
-      if (consolidatedResults.length === 0) {
-        throw new Error('Consolidation produced no valid results');
-      }
-
-      // 8) Save results (with debug info, etc.)
-      setLlmConsolidationDebug(consolidationDebug);
-      await saveHeavyData(sessionId, {
-        fileTree,
-        extractedTexts,
-        summaries,
-        extractedCompanies,
-        rawResponses,
-        consolidatedCompanies: consolidatedResults,
-      });
-
-      // Debug logs if in dev mode
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Consolidation chunks:', chunks);
-        console.log('Final merged companies:', consolidatedResults);
-        console.log('Token usage:', {
-          baseTokens,
-          perChunk: chunks.map((chunk) => ({
-            companies: chunk.length,
-            tokens: estimateTokens(JSON.stringify(chunk)),
-          })),
-        });
-      }
-
-      router.push(`/companies?sessionId=${sessionId}`);
-    } catch (error) {
-      console.error('Consolidation error:', error);
-      router.push(`/companies?sessionId=${sessionId}&message=noData`);
-    } finally {
-      setIsConsolidating(false);
-    }
-  };
-
-  /**
-   * ---------------------------
-   * On Mount: Check User Auth
-   * ---------------------------
-   */
   useEffect(() => {
     const userId =
       typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
@@ -372,169 +92,7 @@ export default function Dashboard() {
     }
   }, [router]);
 
-  /**
-   * ---------------------------
-   * Helper to get all files
-   * ---------------------------
-   */
-  const getAllFiles = (nodes: FileNode[]): FileNode[] => {
-    return nodes.flatMap((node) => {
-      if (node.type === 'folder' && node.children) {
-        return getAllFiles(node.children);
-      }
-      return node.type === 'file' ? [node] : [];
-    });
-  };
-
-  /**
-   * ---------------------------
-   * File Selection
-   * ---------------------------
-   */
-  const handleFileSelect = (node: FileNode) => {
-    if (node.type === 'folder') return;
-    if (!node.content) node.content = ''; // Ensure content is always a string
-    setSelectedFile(node);
-  };
-
-  /**
-   * ---------------------------
-   * "Save Session" Modal
-   * ---------------------------
-   */
-  const openSaveModal = async () => {
-    setNewUploadName('');
-    setExistingUploadId(null);
-    setSelectedUploadOption('new');
-    try {
-      setFetchingUploads(true);
-      const res = await fetch('/api/uploads', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
-      });
-      if (!res.ok) throw new Error('Failed to fetch existing uploads');
-      const data = await res.json();
-      setExistingUploads(data.uploads || []);
-    } catch (err) {
-      console.error('Error fetching uploads:', err);
-      setExistingUploads([]);
-    } finally {
-      setFetchingUploads(false);
-      setShowSaveModal(true);
-    }
-  };
-
-  const closeSaveModal = () => {
-    setShowSaveModal(false);
-  };
-
-  const handleSaveConfirm = async () => {
-    try {
-      // Get the session name from your state (you'll need to ensure this is populated)
-      const sessionName =
-        newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
-      const sessionId = await saveSession(sessionName);
-      localStorage.setItem('currentSessionId', sessionId);
-      setShowSaveModal(false);
-    } catch (error) {
-      console.error('Error in handleSaveConfirm:', error);
-      alert('Error saving data: ' + (error as Error).message);
-    }
-  };
-
-  async function saveSession(sessionName: string): Promise<string> {
-    const fileTreeWithBase64 = addBase64ToTree(fileTree);
-    const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': localStorage.getItem('userId') || '',
-      },
-      body: JSON.stringify({ sessionName }),
-    });
-    if (!res.ok) throw new Error('Failed to save session');
-    const data = await res.json();
-    setCurrentSessionId(data.session_id);
-    await saveHeavyData(data.session_id, {
-      fileTree: fileTreeWithBase64,
-      extractedTexts,
-      summaries,
-      extractedCompanies,
-      rawResponses,
-    });
-
-    setCurrentSessionId(data.session_id);
-
-    setSuccessMessage('Session saved successfully!');
-    localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
-    return data.session_id;
-  }
-
-  /**
-   * ---------------------------
-   * "Load Session" Modal
-   * ---------------------------
-   */
-  const handleLoadClick = async () => {
-    try {
-      const res = await fetch('/api/sessions', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
-      });
-      const data = await res.json();
-      setAvailableSessions(data.sessions);
-      setShowLoadModal(true);
-    } catch {
-      alert('Error loading sessions');
-    }
-  };
-
-  const confirmLoadSession = async (sessionId: string) => {
-    try {
-      const userId = localStorage.getItem('userId');
-      if (!userId) {
-        router.push('/login');
-        return;
-      }
-
-      // 1) Confirm the session is available
-      const response = await fetch('/api/sessions', {
-        headers: { 'x-user-id': userId },
-      });
-      if (!response.ok) throw new Error('Failed to load session');
-      const data = await response.json();
-      if (!data.sessions || data.sessions.length === 0) {
-        alert('No session data found.');
-        return;
-      }
-
-      // 2) Fetch heavy data
-      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
-      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
-      const heavyData = await heavyRes.json();
-
-      setRawResponses(heavyData.rawResponses || {});
-
-      // 3) Rebuild the fileTree from base64
-      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
-      setFileTree(rebuiltTree);
-
-      // 4) Restore chat history, extracted texts, summaries
-      setChatHistory(heavyData.chatHistory || []);
-      setExtractedTexts(heavyData.extractedTexts || {});
-      setSummaries(heavyData.summaries || {});
-      localStorage.setItem('currentSessionId', sessionId);
-      setCurrentSessionId(sessionId);
-      router.push(`/dashboard?sessionId=${sessionId}`); // Redirect to dashboard
-    } catch (error) {
-      console.error('Error loading session:', error);
-      alert('Error loading session: ' + (error as Error).message);
-    }
-  };
-
-  /**
-   * ---------------------------
-   * Rendering
-   * ---------------------------
-   */
+ 
   return (
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
@@ -543,15 +101,16 @@ export default function Dashboard() {
         {successMessage && (
           <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
             {successMessage}
+            {/* Ensure this closing tag matches an opening tag */}
           </div>
         )}
 
         {/* File Upload Area */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <FileUploadArea
-            processZip={processZip}
-            processFolder={processFolder}
-            handleLoadClick={handleLoadClick}
+            processZip={(file) => processZip(file, setFileTree)}
+            processFolder={(fileList) => processFolder(fileList, setFileTree)}
+            handleLoadClick={() => handleLoadClick(setAvailableSessions, setShowLoadModal)}
             isDragActive={false}
           />
         </div>
@@ -613,20 +172,44 @@ export default function Dashboard() {
                 analyzeFiles={async () => {
                   try {
                     // Run analysis
-                    await analyzeFiles({
-                      runSummarization,
-                      runInfoRetrieval,
-                      summarizationModel: runSummarization
-                        ? selectedSummarizationModel
-                        : undefined,
-                      infoRetrievalModel: runInfoRetrieval
-                        ? selectedInfoRetrievalModel
-                        : undefined,
-                    });
+                    await analyzeFiles(
+                      {
+                        runSummarization,
+                        runInfoRetrieval,
+                        summarizationModel: runSummarization
+                          ? selectedSummarizationModel
+                          : undefined,
+                        infoRetrievalModel: runInfoRetrieval
+                          ? selectedInfoRetrievalModel
+                          : undefined,
+                      },
+                      fileTree,
+                      getAllFiles,
+                      base64ToArrayBuffer,
+                      (phase: string) => setProcessingPhase(phase as 'extracting' | 'summarizing' | 'idle' | 'extracting_companies'),
+                      setIsAnalyzing,
+                      setProgress,
+                      setProcessedFiles,
+                      setTotalFiles,
+                      setExtractedTexts,
+                      setSummaries,
+                      setExtractedCompanies,
+                      setRawResponses,
+                      currentSessionId || 'temp-${Date.now()}'
+                    );
 
                     // Auto-save session with generated name
                     const sessionName = `Analysis ${new Date().toLocaleDateString()}`;
-                    const sessionId = await saveSession(sessionName);
+                    const sessionId = await saveSession(
+                      sessionName,
+                      fileTree,
+                      extractedTexts,
+                      summaries,
+                      extractedCompanies,
+                      rawResponses,
+                      setCurrentSessionId,
+                      setSuccessMessage
+                    );
                   } catch (error) {
                     console.error('Processing error:', error);
                     alert(
@@ -635,8 +218,8 @@ export default function Dashboard() {
                     );
                   }
                 }}
-                openSaveModal={openSaveModal}
-                toggleAllFiles={toggleAllFiles}
+                openSaveModal={() => openSaveModal(setNewUploadName, setExistingUploadId, setSelectedUploadOption, setShowSaveModal, setExistingUploads, setFetchingUploads)}
+                toggleAllFiles={(state) => toggleAllFiles(state, setFileTree)}
                 allSelected={allSelected}
                 setAllSelected={setAllSelected}
                 getAllFiles={getAllFiles}
@@ -651,7 +234,7 @@ export default function Dashboard() {
             {/* Actual File Tree */}
             <FileTree
               nodes={fileTree}
-              onSelect={handleFileSelect}
+              onSelect={(node) => handleFileSelect(node || null, setSelectedFile)}
               selectedFile={
                 selectedFile
                   ? { ...selectedFile, content: selectedFile.content || '' }
@@ -708,7 +291,20 @@ export default function Dashboard() {
                 alert('Please save the session first');
                 return;
               }
-              handleConsolidateCompanies(currentSessionId);
+              handleConsolidateCompanies(
+                currentSessionId,
+                fileTree,
+                extractedTexts,
+                summaries,
+                extractedCompanies,
+                rawResponses,
+                setIsConsolidating,
+                setLlmConsolidationDebug,
+                setSuccessMessage,
+                mergeConsolidatedCompanies,
+                selectedInfoRetrievalModel, 
+                router,
+              );
             }}
             disabled={isConsolidating || !currentSessionId}
             className={`px-4 py-2 rounded ${
@@ -770,8 +366,8 @@ export default function Dashboard() {
           showSaveModal={showSaveModal}
           newUploadName={newUploadName}
           setNewUploadName={setNewUploadName}
-          closeSaveModal={closeSaveModal}
-          handleSaveConfirm={handleSaveConfirm}
+          closeSaveModal={() => closeSaveModal(setShowSaveModal)}
+          handleSaveConfirm={() => handleSaveConfirm(newUploadName, (sessionName: string) => saveSession(sessionName, fileTree, extractedTexts, summaries, extractedCompanies, rawResponses, setCurrentSessionId, setSuccessMessage), setShowSaveModal)}
         />
       </main>
 
@@ -779,7 +375,19 @@ export default function Dashboard() {
       <LoadModal
         showLoadModal={showLoadModal}
         availableSessions={availableSessions}
-        confirmLoadSession={confirmLoadSession}
+        confirmLoadSession={(sessionId) =>
+          confirmLoadSession(
+            sessionId,
+            setFileTree,
+            setRawResponses,
+            () => {}, // Placeholder for setChatHistory
+            setExtractedTexts,
+            setSummaries,
+            setExtractedCompanies,
+            setCurrentSessionId,
+            router // Added the missing argument
+          )
+        }
         setShowLoadModal={setShowLoadModal}
       />
     </div>

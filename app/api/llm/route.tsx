@@ -3,8 +3,12 @@ import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';  // <-- For hashing our prompt
 
 export const dynamic = 'force-dynamic';
+
+const DEBUG_MODE_CREATE = process.env.NEXT_PUBLIC_DEBUG_MODE_CREATE === 'true';
+const DEBUG_LOG_FILE = 'debug-responses.jsonl';
 
 interface DeepSeekError {
   error: {
@@ -14,9 +18,67 @@ interface DeepSeekError {
   };
 }
 
-// -------------
-// NEW HELPER: logLLMCall
-// -------------
+/**
+ * Generate a SHA256-based cache key from the request parameters.
+ * You can include whatever fields you want to ensure uniqueness.
+ */
+function generateCacheKey({
+  model,
+  prompt,
+  requestType,
+  context
+}: {
+  model: string;
+  prompt: string;
+  requestType?: string;
+  context?: string;
+}): string {
+  // Combine everything into a single string
+  const raw = `${model}__${requestType ?? ''}__${context ?? ''}__${prompt}`;
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Returns the full file path for a given hash key.
+ * We store in /data/cache by default; create that folder if it doesn’t exist.
+ */
+function getCacheFilePath(hashKey: string): string {
+  const cacheDir = path.join(process.cwd(), 'data', 'cache');
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+  return path.join(cacheDir, `${hashKey}.json`);
+}
+
+/**
+ * Attempts to read a cached response. Returns `null` if not found or parsing fails.
+ */
+function readFromCache(hashKey: string): { content: string; tokensUsed: number; responseTime: number } | null {
+  const filePath = getCacheFilePath(hashKey);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Cache read/parse error:', err);
+    return null;
+  }
+}
+
+/**
+ * Writes LLM response data to the cache as JSON.
+ */
+function writeToCache(
+  hashKey: string,
+  data: { content: string; tokensUsed: number; responseTime: number }
+): void {
+  const filePath = getCacheFilePath(hashKey);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+}
+
+
 function logLLMCall({
   prompt,
   model,
@@ -24,6 +86,7 @@ function logLLMCall({
   userId,
   response,
   error,
+  logId
 }: {
   prompt: string;
   model: string;
@@ -31,29 +94,43 @@ function logLLMCall({
   userId: string | null;
   response?: string;
   error?: string;
+  logId?: string;
 }) {
   try {
     const logsDir = path.join(process.cwd(), 'logs'); 
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir);
-    }
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
+      
     const logFile = path.join(logsDir, 'llm-logs.txt');
-
     const timestamp = new Date().toISOString();
-    let logEntry = `\n[${timestamp}] MODEL: ${model}, USER: ${userId ?? 'Unknown'}, REQUEST_TYPE: ${requestType}\n`;
-    logEntry += `Prompt:\n${prompt}\n`;
 
-    if (response) {
-      logEntry += `Response:\n${response}\n`;
-    }
-    if (error) {
-      logEntry += `Error:\n${error}\n`;
-    }
-    logEntry += '\n-----------------------------------------------------\n';
+    let logEntry = `[${timestamp}] ${model} ${requestType}\n`;
+    logEntry += `Prompt: ${prompt}\n`;
+    if (response) logEntry += `Response: ${response}\n`;
+    if (error) logEntry += `Error: ${error}\n`;
+    logEntry += '----------------------------------------\n';
 
-    // Append sync or async are both valid. Sync is simpler but can block; 
-    // for small logs, it usually won't be an issue:
     fs.appendFileSync(logFile, logEntry, 'utf8');
+
+    // 2) Structured debug logging when in create mode
+    if (DEBUG_MODE_CREATE) {
+      const debugFile = path.join(logsDir, DEBUG_LOG_FILE);
+      const debugEntry = {
+        timestamp,
+        model,
+        requestType,
+        userId,
+        logId,
+        prompt,
+        response,
+        error
+      };
+      
+      fs.appendFileSync(
+        debugFile,
+        JSON.stringify(debugEntry) + '\n',
+        'utf8'
+      );
+    }
   } catch (err) {
     console.error('Failed to write LLM call log:', err);
   }
@@ -64,17 +141,33 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch (error) {
-    // If the request body is invalid JSON, return 400
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { prompt, context, history, model, format, requestType } = body || {};
+  const { prompt, context, history, model, format, requestType, logId,skipCache  } = body || {};
   if (!prompt || typeof prompt !== 'string') {
     return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
   }
 
   const userId = req.headers.get('x-user-id');
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
+  // === CACHING LOGIC BELOW ===
+  // If skipCache is NOT set, we attempt to load from the cache:
+  let cacheKey = '';
+  if (!skipCache) {
+    cacheKey = generateCacheKey({ model, prompt, requestType, context });
+    const cached = readFromCache(cacheKey);
+    if (cached) {
+      // We found an existing cached result, so return it right away
+      console.log(`Returning cached result for key: ${cacheKey}`);
+      return NextResponse.json({
+        content: cached.content,
+        tokensUsed: cached.tokensUsed,
+        responseTime: cached.responseTime
+      });
+    }
+  }
 
   // -------------
   // For local dev/test: Mock response quickly
@@ -87,6 +180,7 @@ export async function POST(req: Request) {
       requestType: requestType || 'unknown',
       userId,
       response: '[MOCKED] No actual LLM call made',
+      logId
     });
 
     await new Promise(res => setTimeout(res, 500));
@@ -181,6 +275,14 @@ export async function POST(req: Request) {
           userId,
           response: content,
         });
+
+        if (!skipCache && cacheKey) {
+          writeToCache(cacheKey, {
+            content,
+            tokensUsed: data.usage?.total_tokens || 0,
+            responseTime
+          });
+        }
 
         return NextResponse.json({
           content,

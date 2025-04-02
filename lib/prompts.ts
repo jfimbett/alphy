@@ -1,3 +1,5 @@
+// lib/prompts.ts
+
 export const defaultSummarizationTemplate = `You are a Summarization Assistant. Your job is to read the text below—written in any language—and produce a single-paragraph summary in clear, fluent English. Focus on the following:
 
 Key financial metrics (e.g., revenue, assets, profitability)
@@ -9,64 +11,130 @@ Instructions:
 - Emphasize the most relevant financial details, along with notable risks and opportunities.
 - Avoid minor or irrelevant information.
 - Output only the summarized text, with no extra commentary, headings, or disclaimers.
+- Include source file path and page numbers
+- Note any ownership relationships
+- Preserve exact numerical values with units
 
-Document Text: {documentText};`;
+Document Text: {documentText};
 
-export const defaultExtractionTemplate = `You are an Information Extraction Assistant. Your task is to read the given text (which may appear in any language) and extract any company-level financial data into a well-structured JSON array. There could be multiple companies mentioned, so please generate an array entry for each distinct company.
+Output format:
+    {
+      "companies": [{
+        "name": "Example Corp",
+        "type": "company",
+        "parent": "Parent Fund",
+        "variables": {
+          "valuation": 1000000,
+          "revenue": 500000
+        },
+        "sources": [{
+          "filePath": "documents/financials.pdf",
+          "pageNumber": 3
+        }]
+      }]
+    }
+`;
 
-Variables:
-{variables}
 
-Rules:
-- Output ONLY valid JSON: Do not include markdown, explanations, or any text outside the JSON.
-- Use EXACT values from the text (including any currency symbols) for numeric fields.
-- Skip any fields that are not present in the text.
-- If multiple statements for different years are found, list all those years in the "years" array and include the corresponding values.
-- Do not include any additional text or explanation outside of the JSON array.
+// -------------------------------------------------
+// 1) UPDATED EXTRACTION TEMPLATE
+// -------------------------------------------------
+export const defaultExtractionTemplate = `You are an Information Extraction Assistant. Your task is to read the given text (which may appear in any language) and extract any company-level financial data into a well-structured JSON array. 
+There could be multiple companies mentioned, so generate an array entry for each distinct company.
 
-Document Text:
-{documentText};`;
+**IMPORTANT**: 
+- Each variable must appear **only once**, without appending the year to the variable name. 
+- If a year is mentioned in the text (e.g., 2018, 2019), store that as a nested object under the variable key. 
+- Example structure for a single variable "operating_income" across 2018 and 2019:
 
-// Update the consolidation template to be more explicit
-export const defaultConsolidationTemplate = `Consolidate company data STRICTLY using this format:
-[{
-  "name": "Exact Company Name",
-  "type": "company/fund",
-  "description": "Max 1 paragraph",
   "variables": {
-    "snake_case_name": {
-      "YYYY": { 
-        "value": number, 
-        "currency": "XXX", 
-        "unit": "m/k/b" 
+    "operating_income": {
+      "2018": {
+        "value": "123,456",
+        "currency": "USD",
+        "sources": [
+          {
+            "filePath": "some.pdf",
+            "pageNumber": 1,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "2019": {
+        "value": "200,000",
+        "currency": "USD",
+        "sources": []
       }
     }
-  },
-  "dates": ["YYYY-MM-DD"]
-}]
+  }
 
 Rules:
-1. ALWAYS return an array, even if empty
-2. Use EXACT names from source data
-3. Include ALL variables from raw data
-4. Convert all values to numbers where possible
+- Output ONLY valid JSON: no markdown, no extra text.
+- Use EXACT values from the text (including currency symbols) for numeric fields where possible.
+- If multiple statements for different years are found, use the year as an integer key (e.g. "2018").
+- If a variable is mentioned without a specific year, you may store it under "value" directly. 
+- If a "type" of entity (company/fund) is mentioned, store it in the "type" field.
+- If the text includes a short description of the company, store it in the "description" field.
+- Omit fields not found in the text.
+
+Document Text:
+{documentText}
+`;
+
+
+// -------------------------------------------------
+// 2) UPDATED CONSOLIDATION TEMPLATE
+// -------------------------------------------------
+export const defaultConsolidationTemplate = `Consolidate company data STRICTLY using this format:
+{
+  "companies": [{
+    "name": "Consolidated Name",
+    "type": "company|fund|fund-of-funds",
+    "parent": "Parent Entity",
+    "variables": {
+      "metric_name": {
+        "value": 123,
+        "sources": [{
+          "filePath": "document.pdf",
+          "pageNumber": 5,
+          "confidence": 0.95
+        }],
+        "2018": {
+          "value": 456,
+          "sources": [...]
+        }
+      }
+    },
+    "ownershipPath": ["Top Parent", "Immediate Parent"]
+  }]
+}
+
+Rules:
+1. ALWAYS return an array of companies, even if empty.
+2. DO NOT append the year to the variable name; if a year is present, store it under that key inside "metric_name".
+3. Consolidate repeated variables. If the same metric is found in multiple places, combine them as necessary, merging sources.
+4. Convert all values to numbers where possible, but preserve numeric formatting if it's ambiguous (like "1,501,419" can stay as string if uncertain).
+5. Use EXACT names from the raw data for the company and variables, except do not append the year in the variable name.
+6. ALWAYS translate the variable names to English, even if the original text is in another language.
+7. Always return the file path and page number for each source, this is a must, you know for sure what is the name of the file, and the page number comes from information inside of the text. 
 
 RAW DATA: {rawData}
 
-OUTPUT:`;
+OUTPUT:
+`;
 
-export const defaultVariableExtraction = `Out of the following text, identify what financial variables are referenced, the text can be written in languages different than english, return me only the list of variables without the values
+// -------------------------------------------------
+// 3) VARIABLE NAME DETECTION PROMPT
+// (Optional, only if you use it in your pipeline)
+// -------------------------------------------------
+export const defaultVariableExtraction = `Out of the following text, identify what financial variables are referenced, the text can be written in languages different than English. Return **only** the list of variables in lower case, using underscores for spaces.
 
-["var1", "var2", ...]
+Example:
+["revenue", "operating_income", "total_assets"]
 
-here is the text, return the name of the variables in english, also be consistent across names and try not to duplicate them, Im looking mostly for accounting variables
-Also return the names of the variables in lower case and with underscores instead of spaces.
+If a year is mentioned (like 2019), do **not** embed that year into the variable name— we only want the raw variable name. We also want:
+- A one-paragraph short company description, if available
+- A "type" field: "company" or "fund" (if the entity invests in other companies)
 
-List first the variables that would be traditionally in an Income Statement, 
-then the ones that would be in a Balance Sheet,
-then the ones that would be in a Cash Flow Statement,
-one that includes the description of the company, maximum one paragraph,
-one that includes a variable that is the type of company, if it is a company or a fund, 
-if the whole business of the company is to invest in other companies then consider it a fund.
-
-{text}`;
+{text}
+`;

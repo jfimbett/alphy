@@ -12,14 +12,37 @@ interface VariableData {
   value?: number | string;
   currency?: string;
   unit?: string;
+  sources: Array<{
+    filePath: string;
+    pageNumber?: number;
+    confidence?: number;
+  }>;
+  [year: number]: {
+    value?: number | string;
+    currency?: string;
+    unit?: string;
+    sources: Array<{
+      filePath: string;
+      pageNumber?: number;
+      confidence?: number;
+    }>;
+  };
 }
 
 interface ConsolidatedCompany {
   name: string;
   type: 'company' | 'fund';
   description: string;
-  variables: Record<string, Record<number, VariableData>>;
+  variables: Record<string, VariableData>;
   dates: string[];
+  parent?: string;
+  children?: ConsolidatedCompany[];
+  ownershipPath: string[];
+  sources: Array<{
+    filePath: string;
+    pageNumber?: number;
+    confidence?: number;
+  }>;
 }
 
 export default function CompaniesPage() {
@@ -31,6 +54,9 @@ export default function CompaniesPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);   // <-- ADD
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
+
+  const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
+
  
   useEffect(() => {
     const userId = localStorage.getItem('userId');
@@ -129,6 +155,7 @@ export default function CompaniesPage() {
             >
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">{company.name}</h2>
+                <div className="flex items-center gap-3">
                 {companyYears.length > 0 && (
                   <select
                     value={selectedYear || ''}
@@ -146,21 +173,43 @@ export default function CompaniesPage() {
                     ))}
                   </select>
                 )}
+              <button
+                    onClick={() => {
+                      const newSet = new Set(expandedOwnership);
+                      newSet.has(company.name) 
+                        ? newSet.delete(company.name) 
+                        : newSet.add(company.name);
+                      setExpandedOwnership(newSet);
+                    }}
+                    className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm"
+                  >
+                    {expandedOwnership.has(company.name) 
+                      ? 'Hide Ownership' 
+                      : 'Show Ownership'}
+                  </button>
+                </div>
               </div>
               
               {company.description && (
                 <p className="text-gray-600 mb-4">{company.description}</p>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {Object.entries(company.variables).map(([varName, years]) => {
-                  const varData = years[selectedYear];
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Updated Variable Display Logic */}
+                {Object.entries(company.variables).map(([varName, variableData]) => {
+                  let varData: any = null;
+                  
+                  // Check for year-specific data
+                  if (selectedYear !== null) {
+                    varData = variableData[selectedYear];
+                  } 
+                  // Fallback to general value if no year selected
+                  else if (variableData.value !== undefined) {
+                    varData = variableData;
+                  }
+
                   return varData ? (
-                    <div 
-                      key={varName}
-                      className="p-4 rounded"
-                      style={{ backgroundColor: `${color}10` }}
-                    >
+                    <div key={varName} className="p-4 rounded" style={{ backgroundColor: `${color}10` }}>
                       <div className="flex justify-between items-center">
                         <span className="font-medium capitalize">
                           {varName.replace(/_/g, ' ')}
@@ -170,9 +219,26 @@ export default function CompaniesPage() {
                           {varData.unit}
                         </span>
                       </div>
+                      <div className="mt-2 text-xs text-gray-500">
+                        Sources:
+                        {varData.sources?.map((source: any, idx: number) => (
+                          <div key={idx} className="mt-1">
+                            • {source.filePath.split('/').pop()} 
+                            {source.pageNumber && ` (Page ${source.pageNumber})`}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null;
                 })}
+
+                {/* Conditionally Rendered Ownership Structure */}
+                {expandedOwnership.has(company.name) && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <h3 className="text-lg font-semibold mb-2">Ownership Structure</h3>
+                    <OwnershipTree company={company} />
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -213,3 +279,23 @@ export default function CompaniesPage() {
     </div>
   );
 }
+
+
+
+
+// Add this component at the bottom of the file
+const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
+  <div className="ml-4 border-l-2 border-gray-200 pl-4">
+    {company.ownershipPath?.map((owner, idx) => (
+      <div key={idx} className="text-sm text-gray-600">
+        {idx === 0 ? 'Root Owner:' : '→'} {owner}
+      </div>
+    ))}
+    {company.children?.map(child => (
+      <div key={child.name} className="mt-2">
+        <div className="font-medium">{child.name}</div>
+        <OwnershipTree company={child} />
+      </div>
+    ))}
+  </div>
+);

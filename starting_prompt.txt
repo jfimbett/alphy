@@ -6,10 +6,19 @@ select the documents that the users wants analyzed, then the LLM first summarize
 it extracts that information, and finally there is a consolidation step because it can happen that the same company 
 appears in different documents. 
 
-I need your help with the following things:
+I need your help with the following things
 
-1. When analyzing companies and then consolidating the information the AI needs to help the user understand the tree of ownership. In the sense that some data can come from funds, some data from funds od funds, and some data from companies. The AI needs to do this automatically. 
-2. When the user observes data that has been extracted from all these documents, it needs to also know where the data comes from. For sure the name of the file where the data was extracted, but ideally also the page. 
+1. I think some json strings that are being returned by the LLM are too long and are terminated before they are supposed to end, this makes the json objects unreadable. I am getting these errors
+
+Console Error
+
+TypeError: existing is undefined
+mergeConsolidatedCompanies/<
+file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (358:9)
+mergeConsolidatedCompanies
+file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (349:27)
+retrieveInfoFromTexts
+file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (584:40)
 
 
 Here is the file structure of the project
@@ -29,20 +38,19 @@ Here is the file structure of the project
   |-- page.tsx
 |-- signup
   |-- page.tsx
-|-- dashboard
-  |-- page.tsx
-  |-- useChat.tsx
-  |-- useFileProcessing.tsx
-  |-- utils
-    |-- fileTreeHelpers.tsx
-|-- data
-  |-- page.tsx
-  |-- [cik]
-    |-- page.tsx
 |-- history
   |-- page.tsx
   |-- [sessionId]
     |-- page.tsx
+|-- data
+  |-- page.tsx
+  |-- [cik]
+    |-- page.tsx
+|-- dashboard
+  |-- page.tsx
+  |-- useChat.tsx
+  |-- utils
+    |-- utils.tsx
 |-- api
   |-- company-facts
     |-- route.tsx
@@ -54,26 +62,26 @@ Here is the file structure of the project
     |-- route.tsx
   |-- countTokens
     |-- route.tsx
-  |-- session-file
-    |-- route.tsx
-  |-- search
-    |-- route.tsx
   |-- llm
-    |-- route.tsx
-  |-- submission-history
     |-- route.tsx
   |-- store-heavy-data
     |-- route.tsx
+  |-- submission-history
+    |-- route.tsx
+  |-- search
+    |-- route.tsx
+  |-- session-file
+    |-- route.tsx
   |-- test
     |-- route.tsx
-  |-- auth
-    |-- login
-      |-- route.tsx
-    |-- signup
-      |-- route.tsx
   |-- files
     |-- route.tsx
     |-- [fileId]
+      |-- route.tsx
+  |-- auth
+    |-- signup
+      |-- route.tsx
+    |-- login
       |-- route.tsx
   |-- sessions
     |-- route.tsx
@@ -115,6 +123,7 @@ Here is the file structure of the project
   |-- search-results.tsx
   |-- skeleton.tsx
   |-- spinner.tsx
+
 
 plus some other standard files in a Next.js project.
 

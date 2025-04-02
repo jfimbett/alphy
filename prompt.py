@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import time
 
 def main():
     # Get the directory where the script is located
@@ -7,15 +8,20 @@ def main():
     
     # List of folders and files relative to the script's directory
     entries = [
-        'app/dashboard/page.tsx', 
-        'app/dashboard/useFileProcessing.tsx',
-        'app/companies',
-        'app/history',
-        'app/api',
+        'lib',
+        'app'
     ]  
 
     # Path to the starting prompt file
     starting_prompt_path = os.path.join(script_dir, "starting_prompt.txt")
+
+    # get the date when the file was last modified 
+    last_modified_time = os.path.getmtime(starting_prompt_path)
+    # convert the time to a human readable format, year-month-day hour:minute:second
+    
+    last_modified_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_modified_time))
+    # Print the last modified time
+    print(f"Last modified time of '{starting_prompt_path}': {last_modified_time}")
     
     # Output file where all file info will be saved
     output_file = os.path.join(script_dir, "prompt.txt")
