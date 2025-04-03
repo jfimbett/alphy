@@ -105,7 +105,14 @@ export const defaultConsolidationTemplate = `Consolidate company data STRICTLY u
         }
       }
     },
-    "ownershipPath": ["Top Parent", "Immediate Parent"]
+    "ownershipPath": ["Top Parent", "Immediate Parent"],
+      "investments": [{
+      "company": "Invested Company Name",
+      "ownershipPercentage": 30,
+      "sources": [...] 
+    }],
+    "subsidiaries": ["Subsidiary Name"],
+    "parentFund": "Main Fund Name",
   }]
 }
 
@@ -117,6 +124,10 @@ Rules:
 5. Use EXACT names from the raw data for the company and variables, except do not append the year in the variable name.
 6. ALWAYS translate the variable names to English, even if the original text is in another language.
 7. Always return the file path and page number for each source, this is a must, you know for sure what is the name of the file, and the page number comes from information inside of the text. 
+8. For funds, list all invested companies in 'investments' array
+9. For companies, list parent fund in 'parentFund' 
+10. For subsidiaries, list parent company in 'parentCompany'
+11. Maintain full ownership hierarchy in 'ownershipPath'
 
 RAW DATA: {rawData}
 
@@ -138,3 +149,25 @@ If a year is mentioned (like 2019), do **not** embed that year into the variable
 
 {text}
 `;
+
+// 2-A) INTERMEDIATE CONSOLIDATION TEMPLATE
+export const defaultIntermediateConsolidationTemplate = `
+Consolidate the following company data into valid JSON. This is an INTERMEDIATE step
+per document only. DO NOT merge with data from other documents yet.
+
+**Input** (rawData):
+  {rawData}
+
+**Rules**:
+1. Return a JSON array or an object with a "companies" field that is itself an array. E.g.
+   [{ "name":"...", "type":"company", "variables": {...}, "parent":"...", "ownershipPath":[] }, ...]
+2. Make sure each company's variables are merged if repeated within THIS text. 
+3. Use EXACT numeric or string values you see in the input (unless merging year-based). 
+4. Do not combine data for other documents or references.
+5. Summaries or disclaimers are not needed; just the JSON data.
+
+**Output**:
+\`\`\`json
+[ ...or... { "companies": [ ... ] } ] 
+\`\`\`
+`.trim();

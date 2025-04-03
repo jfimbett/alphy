@@ -1,12 +1,11 @@
 // app/companies/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';  // <-- ensure React is imported
 import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import { useRouter } from 'next/navigation';
 import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
-
 
 interface VariableData {
   value?: number | string;
@@ -43,21 +42,28 @@ interface ConsolidatedCompany {
     pageNumber?: number;
     confidence?: number;
   }>;
+  // The following are optional properties that might be present for "fund" types or other data structures:
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
 }
 
 export default function CompaniesPage() {
-  const router = useRouter();     // <-- ADD
+  const router = useRouter();
   const searchParams = useSearchParams();
   const existingSessionId = searchParams.get('sessionId');
   
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);   // <-- ADD
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
-
   const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
 
- 
+  // New state for raw JSON toggling
+  const [shownJson, setShownJson] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const userId = localStorage.getItem('userId');
     if (!userId) return; // Not logged in
@@ -156,24 +162,24 @@ export default function CompaniesPage() {
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">{company.name}</h2>
                 <div className="flex items-center gap-3">
-                {companyYears.length > 0 && (
-                  <select
-                    value={selectedYear || ''}
-                    onChange={(e) => {
-                      const year = parseInt(e.target.value, 10);
-                      setSelectedYears(prev => ({
-                        ...prev,
-                        [company.name]: year
-                      }));
-                    }}
-                    className="px-4 py-2 border rounded"
-                  >
-                    {companyYears.map(year => (
-                      <option key={year} value={year}>{year}</option>
-                    ))}
-                  </select>
-                )}
-              <button
+                  {companyYears.length > 0 && (
+                    <select
+                      value={selectedYear || ''}
+                      onChange={(e) => {
+                        const year = parseInt(e.target.value, 10);
+                        setSelectedYears(prev => ({
+                          ...prev,
+                          [company.name]: year
+                        }));
+                      }}
+                      className="px-4 py-2 border rounded"
+                    >
+                      {companyYears.map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
                     onClick={() => {
                       const newSet = new Set(expandedOwnership);
                       newSet.has(company.name) 
@@ -194,7 +200,7 @@ export default function CompaniesPage() {
                 <p className="text-gray-600 mb-4">{company.description}</p>
               )}
 
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Updated Variable Display Logic */}
                 {Object.entries(company.variables).map(([varName, variableData]) => {
                   let varData: any = null;
@@ -203,7 +209,7 @@ export default function CompaniesPage() {
                   if (selectedYear !== null) {
                     varData = variableData[selectedYear];
                   } 
-                  // Fallback to general value if no year selected
+                  // Fallback to general value if no year is selected
                   else if (variableData.value !== undefined) {
                     varData = variableData;
                   }
@@ -231,12 +237,36 @@ export default function CompaniesPage() {
                     </div>
                   ) : null;
                 })}
-
+                
                 {/* Conditionally Rendered Ownership Structure */}
                 {expandedOwnership.has(company.name) && (
                   <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                     <h3 className="text-lg font-semibold mb-2">Ownership Structure</h3>
                     <OwnershipTree company={company} />
+                  </div>
+                )}
+              </div>
+
+              {/* Show/Hide Raw Data Button & JSON Preview */}
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    const newSet = new Set(shownJson);
+                    newSet.has(company.name) 
+                      ? newSet.delete(company.name) 
+                      : newSet.add(company.name);
+                    setShownJson(newSet);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  {shownJson.has(company.name) ? 'Hide Raw Data' : 'Show Raw Data'}
+                </button>
+                
+                {shownJson.has(company.name) && (
+                  <div className="mt-2 p-3 bg-gray-50 rounded">
+                    <pre className="text-xs overflow-auto max-h-96">
+                      {JSON.stringify(company, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>
@@ -251,14 +281,13 @@ export default function CompaniesPage() {
     <div className="min-h-screen bg-gray-50">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
-         {/* 
-         * Session Selector 
-         */}
+
+        {/* Session Selector */}
         <div className="mb-4 text-gray-500">
           <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
           <select
             className="border p-2 rounded"
-            value={existingSessionId || ''} // empty if no session chosen
+            value={existingSessionId || ''}
             onChange={(e) => {
               const newSessionId = e.target.value;
               router.push(`/companies?sessionId=${newSessionId}`);
@@ -280,17 +309,44 @@ export default function CompaniesPage() {
   );
 }
 
-
-
-
-// Add this component at the bottom of the file
+// OwnershipTree component with investments and subsidiaries display
 const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
   <div className="ml-4 border-l-2 border-gray-200 pl-4">
+    {/* Existing ownership path */}
     {company.ownershipPath?.map((owner, idx) => (
       <div key={idx} className="text-sm text-gray-600">
         {idx === 0 ? 'Root Owner:' : '→'} {owner}
       </div>
     ))}
+    
+    {/* Display investments for funds */}
+    {company.type === 'fund' && (company.investments ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Investments:</h4>
+        {(company.investments ?? []).map((investment, idx) => (
+          <div key={idx} className="flex items-center gap-2 text-sm">
+            <span>{investment.company}</span>
+            {investment.ownershipPercentage && (
+              <span className="text-gray-500">
+                ({investment.ownershipPercentage}%)
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* Display subsidiaries */}
+    {(company.subsidiaries ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Subsidiaries:</h4>
+        {(company.subsidiaries ?? []).map((sub, idx) => (
+          <div key={idx} className="text-sm">{sub}</div>
+        ))}
+      </div>
+    )}
+
+    {/* Recursive children */}
     {company.children?.map(child => (
       <div key={child.name} className="mt-2">
         <div className="font-medium">{child.name}</div>

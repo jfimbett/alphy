@@ -8,18 +8,7 @@ appears in different documents.
 
 I need your help with the following things
 
-1. I think some json strings that are being returned by the LLM are too long and are terminated before they are supposed to end, this makes the json objects unreadable. I am getting these errors
-
-Console Error
-
-TypeError: existing is undefined
-mergeConsolidatedCompanies/<
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (358:9)
-mergeConsolidatedCompanies
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (349:27)
-retrieveInfoFromTexts
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (584:40)
-
+1. I am not seeing the name of the jkson file where the LLM response is stored. I need to know where that is
 
 Here is the file structure of the project
 

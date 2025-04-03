@@ -1,3 +1,5 @@
+// types.ts
+
 export interface CompanySource {
   filePath: string;
   pageNumber?: number;
@@ -5,28 +7,35 @@ export interface CompanySource {
 }
 
 export type CompanyInfo = {
-    name: string;
-    sector?: string;
-    years?: number[];
-    variables?: Record<string, VariableData>;
-    sources?: CompanySource[];
-  };
+  name: string;
+  sector?: string;
+  years?: number[];
+  variables?: Record<string, VariableData>;
+  sources?: CompanySource[];
+};
 
-  export interface VariableData {
-    value?: number | string;
-    currency?: string;
-    unit?: string;
-  }
-  
-  export interface ConsolidatedCompany extends CompanyInfo {
-    variables: Record<string, VariableData>;
-    dates: string[];
-    children?: ConsolidatedCompany[];
-    ownershipPath: string[];
-    parent: ConsolidatedCompany | null;
-  }
+export interface VariableData {
+  value?: number | string;
+  currency?: string;
+  unit?: string;
+}
 
-  // In types.ts
+export interface ConsolidatedCompany extends CompanyInfo {
+  variables: Record<string, VariableData>;
+  dates: string[];
+  children?: ConsolidatedCompany[];
+  ownershipPath: string[];
+  parent: ConsolidatedCompany | null;
+
+  // Optional if dealing with funds
+  type?: 'company' | 'fund';
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
+}
+
 export interface SessionSummary {
   session_id: number;
   session_name: string;
@@ -43,7 +52,6 @@ export interface SessionData {
   consolidatedCompanies?: ConsolidatedCompany[];
 }
 
-// In types.ts
 export interface FileNode {
   name: string;
   type: 'file' | 'folder';
@@ -56,7 +64,6 @@ export interface FileNode {
   localPath?: string; // Added for file storage tracking
 }
 
-// In types.ts
 export type CompanyMap = Map<string, ConsolidatedCompany>;
 export type ExtractedTexts = Record<string, string>;
 export type FileTree = FileNode[];

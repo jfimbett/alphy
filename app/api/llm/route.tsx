@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 const DEBUG_MODE_CREATE = process.env.NEXT_PUBLIC_DEBUG_MODE_CREATE === 'true';
 const DEBUG_LOG_FILE = 'debug-responses.jsonl';
 
+
 interface DeepSeekError {
   error: {
     message: string;
@@ -17,11 +18,6 @@ interface DeepSeekError {
     code: string;
   };
 }
-
-/**
- * Generate a SHA256-based cache key from the request parameters.
- * You can include whatever fields you want to ensure uniqueness.
- */
 function generateCacheKey({
   model,
   prompt,
@@ -33,7 +29,6 @@ function generateCacheKey({
   requestType?: string;
   context?: string;
 }): string {
-  // Combine everything into a single string
   const raw = `${model}__${requestType ?? ''}__${context ?? ''}__${prompt}`;
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
@@ -44,9 +39,6 @@ function generateCacheKey({
  */
 function getCacheFilePath(hashKey: string): string {
   const cacheDir = path.join(process.cwd(), 'data', 'cache');
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-  }
   return path.join(cacheDir, `${hashKey}.json`);
 }
 
@@ -144,7 +136,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { prompt, context, history, model, format, requestType, logId,skipCache  } = body || {};
+  const { prompt, context, history, model, format, requestType, logId, skipCache } = body || {};
   if (!prompt || typeof prompt !== 'string') {
     return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
   }
@@ -153,14 +145,14 @@ export async function POST(req: Request) {
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
 
   // === CACHING LOGIC BELOW ===
-  // If skipCache is NOT set, we attempt to load from the cache:
-  let cacheKey = '';
+  // Generate cache key regardless of skipCache to handle errors
+  const cacheKey = generateCacheKey({ model, prompt, requestType, context });
+  
+  // If skipCache is NOT set, check cache first
+  let cached = null;
   if (!skipCache) {
-    cacheKey = generateCacheKey({ model, prompt, requestType, context });
-    const cached = readFromCache(cacheKey);
+    cached = readFromCache(cacheKey);
     if (cached) {
-      // We found an existing cached result, so return it right away
-      console.log(`Returning cached result for key: ${cacheKey}`);
       return NextResponse.json({
         content: cached.content,
         tokensUsed: cached.tokensUsed,
@@ -217,8 +209,6 @@ export async function POST(req: Request) {
         temperature: 0.0,
         max_tokens: 8000,
         stream: false,
-        // For "json" format, you'd generally let the system or user instructions 
-        // shape the output. (DeepSeek doesn't use `response_format` like OpenAI)
       };
 
       const startTime = Date.now();
@@ -231,7 +221,7 @@ export async function POST(req: Request) {
         body: JSON.stringify(requestPayload),
       });
       const responseTime = Date.now() - startTime;
-      const responseText = await response.text();
+      const responseText = await response.text(); // Get raw response text
 
       if (!response.ok) {
         console.error('DeepSeek API Error Details:', {
@@ -246,6 +236,7 @@ export async function POST(req: Request) {
           requestType: requestType || 'unknown',
           userId,
           error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
+          logId
         });
         return NextResponse.json(
           { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
@@ -253,7 +244,7 @@ export async function POST(req: Request) {
         );
       }
 
-      // Now attempt to parse the JSON
+      // Attempt to parse the JSON response from API
       try {
         const data = JSON.parse(responseText);
         let content = '';
@@ -274,8 +265,10 @@ export async function POST(req: Request) {
           requestType: requestType || 'unknown',
           userId,
           response: content,
+          logId
         });
 
+        // Write to cache only if skipCache is false AND parsing succeeded
         if (!skipCache && cacheKey) {
           writeToCache(cacheKey, {
             content,
@@ -290,7 +283,13 @@ export async function POST(req: Request) {
           responseTime,
         });
       } catch (parseError) {
-        // If parse fails, log the error but return the raw text
+        // Write raw response to cache for debugging even if skipCache is true
+        writeToCache(cacheKey, {
+          content: responseText,
+          tokensUsed: 0,
+          responseTime
+        });
+
         logLLMCall({
           prompt,
           model,
@@ -298,11 +297,14 @@ export async function POST(req: Request) {
           userId,
           error: `Response JSON Parse Error: ${String(parseError)}`,
           response: responseText,
+          logId
         });
+
         return NextResponse.json(
           {
             error: 'Failed to parse API response',
             response: responseText,
+            cacheFileName: `${cacheKey}.json` // Include cache filename
           },
           { status: 500 }
         );
@@ -319,6 +321,7 @@ export async function POST(req: Request) {
       requestType: requestType || 'unknown',
       userId,
       error: String(error),
+      logId
     });
 
     console.error('LLM Processing Error:', error);

@@ -77,3 +77,22 @@ CREATE TABLE api_keys (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(user_id, provider)
 );
+
+
+-- Add to your database schema
+CREATE TABLE llm_requests (
+  request_id SERIAL PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  model VARCHAR(255) NOT NULL,
+  prompt TEXT NOT NULL,
+  response TEXT,
+  context TEXT,
+  request_type VARCHAR(255),
+  user_id INT REFERENCES users(user_id),
+  tokens_used INT,
+  response_time INT,
+  cache_hit BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX idx_llm_requests_model ON llm_requests(model);
+CREATE INDEX idx_llm_requests_created_at ON llm_requests(created_at);

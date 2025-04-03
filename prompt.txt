@@ -8,18 +8,7 @@ appears in different documents.
 
 I need your help with the following things
 
-1. I think some json strings that are being returned by the LLM are too long and are terminated before they are supposed to end, this makes the json objects unreadable. I am getting these errors
-
-Console Error
-
-TypeError: existing is undefined
-mergeConsolidatedCompanies/<
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (358:9)
-mergeConsolidatedCompanies
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (349:27)
-retrieveInfoFromTexts
-file:/C:/Users/jimbet/Documents/alphy/.next/static/chunks/_3b7b80._.js (584:40)
-
+1. I am not seeing the name of the jkson file where the LLM response is stored. I need to know where that is
 
 Here is the file structure of the project
 
@@ -285,7 +274,14 @@ export const defaultConsolidationTemplate = `Consolidate company data STRICTLY u
         }
       }
     },
-    "ownershipPath": ["Top Parent", "Immediate Parent"]
+    "ownershipPath": ["Top Parent", "Immediate Parent"],
+      "investments": [{
+      "company": "Invested Company Name",
+      "ownershipPercentage": 30,
+      "sources": [...] 
+    }],
+    "subsidiaries": ["Subsidiary Name"],
+    "parentFund": "Main Fund Name",
   }]
 }
 
@@ -296,7 +292,11 @@ Rules:
 4. Convert all values to numbers where possible, but preserve numeric formatting if it's ambiguous (like "1,501,419" can stay as string if uncertain).
 5. Use EXACT names from the raw data for the company and variables, except do not append the year in the variable name.
 6. ALWAYS translate the variable names to English, even if the original text is in another language.
-7. Always return the file path and page number for each source. 
+7. Always return the file path and page number for each source, this is a must, you know for sure what is the name of the file, and the page number comes from information inside of the text. 
+8. For funds, list all invested companies in 'investments' array
+9. For companies, list parent fund in 'parentFund' 
+10. For subsidiaries, list parent company in 'parentCompany'
+11. Maintain full ownership hierarchy in 'ownershipPath'
 
 RAW DATA: {rawData}
 
@@ -319,6 +319,27 @@ If a year is mentioned (like 2019), do **not** embed that year into the variable
 {text}
 `;
 
+// 2-A) INTERMEDIATE CONSOLIDATION TEMPLATE
+export const defaultIntermediateConsolidationTemplate = `
+Consolidate the following company data into valid JSON. This is an INTERMEDIATE step
+per document only. DO NOT merge with data from other documents yet.
+
+**Input** (rawData):
+  {rawData}
+
+**Rules**:
+1. Return a JSON array or an object with a "companies" field that is itself an array. E.g.
+   [{ "name":"...", "type":"company", "variables": {...}, "parent":"...", "ownershipPath":[] }, ...]
+2. Make sure each company's variables are merged if repeated within THIS text. 
+3. Use EXACT numeric or string values you see in the input (unless merging year-based). 
+4. Do not combine data for other documents or references.
+5. Summaries or disclaimers are not needed; just the JSON data.
+
+**Output**:
+\`\`\`json
+[ ...or... { "companies": [ ... ] } ] 
+\`\`\`
+`.trim();
 ----------------------------------------
 
 File: lib\utils.tsx
@@ -603,6 +624,8 @@ export default function Home() {
 
 File: app\types.ts
 ----------------------------------------
+// types.ts
+
 export interface CompanySource {
   filePath: string;
   pageNumber?: number;
@@ -610,28 +633,35 @@ export interface CompanySource {
 }
 
 export type CompanyInfo = {
-    name: string;
-    sector?: string;
-    years?: number[];
-    variables?: Record<string, VariableData>;
-    sources?: CompanySource[];
-  };
+  name: string;
+  sector?: string;
+  years?: number[];
+  variables?: Record<string, VariableData>;
+  sources?: CompanySource[];
+};
 
-  export interface VariableData {
-    value?: number | string;
-    currency?: string;
-    unit?: string;
-  }
-  
-  export interface ConsolidatedCompany extends CompanyInfo {
-    variables: Record<string, VariableData>;
-    dates: string[];
-    children?: ConsolidatedCompany[];
-    ownershipPath: string[];
-    parent: ConsolidatedCompany | null;
-  }
+export interface VariableData {
+  value?: number | string;
+  currency?: string;
+  unit?: string;
+}
 
-  // In types.ts
+export interface ConsolidatedCompany extends CompanyInfo {
+  variables: Record<string, VariableData>;
+  dates: string[];
+  children?: ConsolidatedCompany[];
+  ownershipPath: string[];
+  parent: ConsolidatedCompany | null;
+
+  // Optional if dealing with funds
+  type?: 'company' | 'fund';
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
+}
+
 export interface SessionSummary {
   session_id: number;
   session_name: string;
@@ -648,7 +678,6 @@ export interface SessionData {
   consolidatedCompanies?: ConsolidatedCompany[];
 }
 
-// In types.ts
 export interface FileNode {
   name: string;
   type: 'file' | 'folder';
@@ -661,10 +690,10 @@ export interface FileNode {
   localPath?: string; // Added for file storage tracking
 }
 
-// In types.ts
 export type CompanyMap = Map<string, ConsolidatedCompany>;
 export type ExtractedTexts = Record<string, string>;
 export type FileTree = FileNode[];
+
 ----------------------------------------
 
 File: app\api\account-data\route.tsx
@@ -1221,7 +1250,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { prompt, context, history, model, format, requestType, logId,skipCache  } = body || {};
+  const { prompt, context, history, model, format, requestType, logId, skipCache } = body || {};
   if (!prompt || typeof prompt !== 'string') {
     return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
   }
@@ -1230,14 +1259,14 @@ export async function POST(req: Request) {
   const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
 
   // === CACHING LOGIC BELOW ===
-  // If skipCache is NOT set, we attempt to load from the cache:
-  let cacheKey = '';
+  // Generate cache key regardless of skipCache to handle errors
+  const cacheKey = generateCacheKey({ model, prompt, requestType, context });
+  
+  // If skipCache is NOT set, check cache first
+  let cached = null;
   if (!skipCache) {
-    cacheKey = generateCacheKey({ model, prompt, requestType, context });
-    const cached = readFromCache(cacheKey);
+    cached = readFromCache(cacheKey);
     if (cached) {
-      // We found an existing cached result, so return it right away
-      console.log(`Returning cached result for key: ${cacheKey}`);
       return NextResponse.json({
         content: cached.content,
         tokensUsed: cached.tokensUsed,
@@ -1294,8 +1323,6 @@ export async function POST(req: Request) {
         temperature: 0.0,
         max_tokens: 8000,
         stream: false,
-        // For "json" format, you'd generally let the system or user instructions 
-        // shape the output. (DeepSeek doesn't use `response_format` like OpenAI)
       };
 
       const startTime = Date.now();
@@ -1308,7 +1335,7 @@ export async function POST(req: Request) {
         body: JSON.stringify(requestPayload),
       });
       const responseTime = Date.now() - startTime;
-      const responseText = await response.text();
+      const responseText = await response.text(); // Get raw response text
 
       if (!response.ok) {
         console.error('DeepSeek API Error Details:', {
@@ -1323,6 +1350,7 @@ export async function POST(req: Request) {
           requestType: requestType || 'unknown',
           userId,
           error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
+          logId
         });
         return NextResponse.json(
           { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
@@ -1330,7 +1358,7 @@ export async function POST(req: Request) {
         );
       }
 
-      // Now attempt to parse the JSON
+      // Attempt to parse the JSON response from API
       try {
         const data = JSON.parse(responseText);
         let content = '';
@@ -1351,8 +1379,10 @@ export async function POST(req: Request) {
           requestType: requestType || 'unknown',
           userId,
           response: content,
+          logId
         });
 
+        // Write to cache only if skipCache is false AND parsing succeeded
         if (!skipCache && cacheKey) {
           writeToCache(cacheKey, {
             content,
@@ -1367,7 +1397,13 @@ export async function POST(req: Request) {
           responseTime,
         });
       } catch (parseError) {
-        // If parse fails, log the error but return the raw text
+        // Write raw response to cache for debugging even if skipCache is true
+        writeToCache(cacheKey, {
+          content: responseText,
+          tokensUsed: 0,
+          responseTime
+        });
+
         logLLMCall({
           prompt,
           model,
@@ -1375,11 +1411,14 @@ export async function POST(req: Request) {
           userId,
           error: `Response JSON Parse Error: ${String(parseError)}`,
           response: responseText,
+          logId
         });
+
         return NextResponse.json(
           {
             error: 'Failed to parse API response',
             response: responseText,
+            cacheFileName: `${cacheKey}.json` // Include cache filename
           },
           { status: 500 }
         );
@@ -1396,6 +1435,7 @@ export async function POST(req: Request) {
       requestType: requestType || 'unknown',
       userId,
       error: String(error),
+      logId
     });
 
     console.error('LLM Processing Error:', error);
@@ -2176,12 +2216,11 @@ File: app\companies\page.tsx
 // app/companies/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';  // <-- ensure React is imported
 import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import { useRouter } from 'next/navigation';
 import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
-
 
 interface VariableData {
   value?: number | string;
@@ -2218,21 +2257,28 @@ interface ConsolidatedCompany {
     pageNumber?: number;
     confidence?: number;
   }>;
+  // The following are optional properties that might be present for "fund" types or other data structures:
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
 }
 
 export default function CompaniesPage() {
-  const router = useRouter();     // <-- ADD
+  const router = useRouter();
   const searchParams = useSearchParams();
   const existingSessionId = searchParams.get('sessionId');
   
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);   // <-- ADD
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
-
   const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
 
- 
+  // New state for raw JSON toggling
+  const [shownJson, setShownJson] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const userId = localStorage.getItem('userId');
     if (!userId) return; // Not logged in
@@ -2331,24 +2377,24 @@ export default function CompaniesPage() {
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">{company.name}</h2>
                 <div className="flex items-center gap-3">
-                {companyYears.length > 0 && (
-                  <select
-                    value={selectedYear || ''}
-                    onChange={(e) => {
-                      const year = parseInt(e.target.value, 10);
-                      setSelectedYears(prev => ({
-                        ...prev,
-                        [company.name]: year
-                      }));
-                    }}
-                    className="px-4 py-2 border rounded"
-                  >
-                    {companyYears.map(year => (
-                      <option key={year} value={year}>{year}</option>
-                    ))}
-                  </select>
-                )}
-              <button
+                  {companyYears.length > 0 && (
+                    <select
+                      value={selectedYear || ''}
+                      onChange={(e) => {
+                        const year = parseInt(e.target.value, 10);
+                        setSelectedYears(prev => ({
+                          ...prev,
+                          [company.name]: year
+                        }));
+                      }}
+                      className="px-4 py-2 border rounded"
+                    >
+                      {companyYears.map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
                     onClick={() => {
                       const newSet = new Set(expandedOwnership);
                       newSet.has(company.name) 
@@ -2369,7 +2415,7 @@ export default function CompaniesPage() {
                 <p className="text-gray-600 mb-4">{company.description}</p>
               )}
 
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Updated Variable Display Logic */}
                 {Object.entries(company.variables).map(([varName, variableData]) => {
                   let varData: any = null;
@@ -2378,7 +2424,7 @@ export default function CompaniesPage() {
                   if (selectedYear !== null) {
                     varData = variableData[selectedYear];
                   } 
-                  // Fallback to general value if no year selected
+                  // Fallback to general value if no year is selected
                   else if (variableData.value !== undefined) {
                     varData = variableData;
                   }
@@ -2406,12 +2452,36 @@ export default function CompaniesPage() {
                     </div>
                   ) : null;
                 })}
-
+                
                 {/* Conditionally Rendered Ownership Structure */}
                 {expandedOwnership.has(company.name) && (
                   <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                     <h3 className="text-lg font-semibold mb-2">Ownership Structure</h3>
                     <OwnershipTree company={company} />
+                  </div>
+                )}
+              </div>
+
+              {/* Show/Hide Raw Data Button & JSON Preview */}
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    const newSet = new Set(shownJson);
+                    newSet.has(company.name) 
+                      ? newSet.delete(company.name) 
+                      : newSet.add(company.name);
+                    setShownJson(newSet);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  {shownJson.has(company.name) ? 'Hide Raw Data' : 'Show Raw Data'}
+                </button>
+                
+                {shownJson.has(company.name) && (
+                  <div className="mt-2 p-3 bg-gray-50 rounded">
+                    <pre className="text-xs overflow-auto max-h-96">
+                      {JSON.stringify(company, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>
@@ -2426,14 +2496,13 @@ export default function CompaniesPage() {
     <div className="min-h-screen bg-gray-50">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
-         {/* 
-         * Session Selector 
-         */}
+
+        {/* Session Selector */}
         <div className="mb-4 text-gray-500">
           <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
           <select
             className="border p-2 rounded"
-            value={existingSessionId || ''} // empty if no session chosen
+            value={existingSessionId || ''}
             onChange={(e) => {
               const newSessionId = e.target.value;
               router.push(`/companies?sessionId=${newSessionId}`);
@@ -2455,17 +2524,44 @@ export default function CompaniesPage() {
   );
 }
 
-
-
-
-// Add this component at the bottom of the file
+// OwnershipTree component with investments and subsidiaries display
 const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
   <div className="ml-4 border-l-2 border-gray-200 pl-4">
+    {/* Existing ownership path */}
     {company.ownershipPath?.map((owner, idx) => (
       <div key={idx} className="text-sm text-gray-600">
         {idx === 0 ? 'Root Owner:' : '→'} {owner}
       </div>
     ))}
+    
+    {/* Display investments for funds */}
+    {company.type === 'fund' && (company.investments ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Investments:</h4>
+        {(company.investments ?? []).map((investment, idx) => (
+          <div key={idx} className="flex items-center gap-2 text-sm">
+            <span>{investment.company}</span>
+            {investment.ownershipPercentage && (
+              <span className="text-gray-500">
+                ({investment.ownershipPercentage}%)
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* Display subsidiaries */}
+    {(company.subsidiaries ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Subsidiaries:</h4>
+        {(company.subsidiaries ?? []).map((sub, idx) => (
+          <div key={idx} className="text-sm">{sub}</div>
+        ))}
+      </div>
+    )}
+
+    {/* Recursive children */}
     {company.children?.map(child => (
       <div key={child.name} className="mt-2">
         <div className="font-medium">{child.name}</div>
@@ -2474,6 +2570,7 @@ const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
     ))}
   </div>
 );
+
 ----------------------------------------
 
 File: app\dashboard\page.tsx
@@ -2524,6 +2621,11 @@ import {getConsolidationPrompt, buildFileTree, getAllFiles, processZip, processF
 
 
 export default function Dashboard() {
+    // Add these state variables near other useState hooks
+  const [consolidateProgress, setConsolidateProgress]               = useState(0);
+  const [totalFilesToConsolidate, setTotalFilesToConsolidate]       = useState(0);
+  const [currentConsolidatingFile, setCurrentConsolidatingFile]     = useState('');
+  const [errorFiles, setErrorFiles]                                 = useState<string[]>([]);
   const router                                                      = useRouter();
   const formRef                                                     = useRef<HTMLFormElement | null>(null);
   const [rawResponses, setRawResponses]                             = useState<Record<string, { prompt: string; response: string }>>({});
@@ -2763,39 +2865,87 @@ export default function Dashboard() {
           />
         )}
 
-        {/* Consolidate Companies Button */}
-        {fileTree.length > 0 && (
-          <button
-            onClick={() => {
-              if (!currentSessionId) {
-                alert('Please save the session first');
-                return;
-              }
-              handleConsolidateCompanies(
-                currentSessionId,
-                fileTree,
-                extractedTexts,
-                summaries,
-                extractedCompanies,
-                rawResponses,
-                setIsConsolidating,
-                setLlmConsolidationDebug,
-                setSuccessMessage,
-                mergeConsolidatedCompanies,
-                selectedInfoRetrievalModel, 
-                router,
-              );
-            }}
-            disabled={isConsolidating || !currentSessionId}
-            className={`px-4 py-2 rounded ${
-              isConsolidating || !currentSessionId
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
-          >
-            {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
-          </button>
-        )}
+<div className="bg-white p-4 rounded-lg shadow-sm mb-6">
+  <div className="flex items-center justify-between mb-4">
+    <div>
+      <button
+        onClick={() => {
+          if (!currentSessionId) {
+            alert('Please save the session first');
+            return;
+          }
+          setErrorFiles([]);
+          handleConsolidateCompanies(
+            currentSessionId,
+            fileTree,
+            extractedTexts,
+            summaries,
+            extractedCompanies,
+            rawResponses,
+            setIsConsolidating,
+            setLlmConsolidationDebug,
+            setSuccessMessage,
+            mergeConsolidatedCompanies,
+            selectedInfoRetrievalModel,
+            router,
+            (processed, total, currentFile) => {
+              setConsolidateProgress(processed);
+              setTotalFilesToConsolidate(total);
+              setCurrentConsolidatingFile(currentFile);
+            },
+            (errorFile) => {
+              setErrorFiles(prev => [...prev, errorFile]);
+            }
+          );
+        }}
+        disabled={isConsolidating || !currentSessionId}
+        className={`px-4 py-2 rounded ${
+          isConsolidating || !currentSessionId
+            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            : 'bg-blue-600 text-white hover:bg-blue-700'
+        }`}
+      >
+        {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
+      </button>
+    </div>
+  </div>
+
+  {isConsolidating && (
+    <div className="mt-4">
+      <div className="mb-2 flex justify-between text-sm text-gray-600">
+        <span>
+          Processing: {currentConsolidatingFile || 'Initializing...'}
+        </span>
+        <span>
+          {consolidateProgress} / {totalFilesToConsolidate}
+        </span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-2.5">
+        <div
+          className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+          style={{
+            width: `${(consolidateProgress / Math.max(totalFilesToConsolidate, 1)) * 100}%`
+          }}
+        ></div>
+      </div>
+
+      {errorFiles.length > 0 && (
+        <div className="mt-4 p-3 bg-red-50 rounded-lg">
+          <h4 className="font-semibold text-red-600 mb-2">
+            Errors occurred in these files:
+          </h4>
+          <ul className="list-disc pl-5 space-y-1">
+            {errorFiles.map((file, index) => (
+              <li key={index} className="text-sm text-red-500">
+                {file.split('/').pop()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )}
+</div>
 
         {/* Toggle Button for Debug Info */}
         <button
@@ -2973,7 +3123,7 @@ File: app\dashboard\utils\utils.tsx
 // ==================================================================
 // 1) Imports
 // ==================================================================
-'use client'; 
+'use client';
 // --- External Libraries ---
 import JSZip from 'jszip';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
@@ -2981,14 +3131,14 @@ import * as XLSX from 'xlsx';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { Dispatch, SetStateAction } from 'react';
 
-
 // --- Internal (Local) Imports ---
 import { CompanyInfo, ConsolidatedCompany } from '@/app/types';
 import {
   defaultSummarizationTemplate,
   defaultExtractionTemplate,
   defaultConsolidationTemplate,
-  defaultVariableExtraction
+  defaultVariableExtraction,
+  defaultIntermediateConsolidationTemplate,
 } from '@/lib/prompts';
 import { FileNode } from '@/components/FileTree';
 import { getModelConfig } from '@/lib/modelConfig';
@@ -2996,6 +3146,15 @@ import { getModelConfig } from '@/lib/modelConfig';
 // ==================================================================
 // 2) Types & Interfaces
 // ==================================================================
+export const getIntermediateConsolidationPrompt = (rawData: Record<string, any>) => {
+  // If you want to allow override from localStorage, do so:
+  const template =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('intermediateConsolidationTemplate') || defaultIntermediateConsolidationTemplate
+      : defaultIntermediateConsolidationTemplate;
+
+  return template.replace('{rawData}', JSON.stringify(rawData));
+};
 
 /**
  * Represents an existing file upload in the system.
@@ -3014,7 +3173,6 @@ export interface FilePayload {
   blobUrl: string;
 }
 
-
 // ======================================
 // Refactored retrieveInfoFromTexts
 // ======================================
@@ -3026,7 +3184,7 @@ async function retrieveInfoFromTextsRefactored(
   extractedTexts: Record<string, string>,
   infoRetrievalModel: string,
   logId: string // optional (for logging)
-): Promise< Record<string, CompanyInfo[]> > {
+): Promise<Record<string, CompanyInfo[]>> {
   // Holds the final "filePath -> arrayOfCompanies" result
   const allExtracted: Record<string, CompanyInfo[]> = {};
 
@@ -3146,7 +3304,6 @@ async function retrieveInfoFromTextsRefactored(
   return allExtracted;
 }
 
-
 // ==================================================================
 // 3) Utility & Helper Functions
 // ==================================================================
@@ -3170,17 +3327,35 @@ export function estimateTokens(text: string): number {
 const deepClone = (obj: any) => JSON.parse(JSON.stringify(obj));
 
 /**
- * Deep merges source object into target object.
+ * Deep merges source object into target object (with special handling for certain keys, arrays,
+ * nested objects, and newly-added fields).
  * @param target - Target object to merge into.
  * @param source - Source object to merge from.
  * @returns The merged object.
  */
 const deepMerge = (target: any, source: any) => {
   Object.keys(source).forEach((key) => {
-    if (source[key] instanceof Object && key in target) {
+    if (key === 'investments' || key === 'subsidiaries') {
+      // Merge arrays while avoiding duplicates
+      target[key] = Array.from(
+        new Set([
+          ...(target[key] || []),
+          ...(source[key] || []),
+        ])
+      );
+    } 
+    // If both target & source have a nested object at this key, merge them deeply
+    else if (source[key] instanceof Object && key in target) {
       Object.assign(source[key], deepMerge(target[key], source[key]));
+    } 
+    // If it's a new object field in source (not in target), clone it in
+    else if (source[key] instanceof Object && !(key in target)) {
+      target[key] = deepClone(source[key]);
     }
+    // (If it's a primitive or something else new, let the final Object.assign handle it)
   });
+
+  // Finally, copy over any remaining properties (primitives, etc.)
   return Object.assign(target, source);
 };
 
@@ -3294,7 +3469,7 @@ export const getAllFiles = (nodes: FileNode[]): FileNode[] => {
 export const processZip = async (
   file: File,
   setFileTree: React.Dispatch<React.SetStateAction<FileNode[]>>
-): Promise<void> => { // Added arrow here
+): Promise<void> => {
   const zip = new JSZip();
   const zipContent = await zip.loadAsync(file);
 
@@ -3440,45 +3615,83 @@ export const mergeConsolidatedCompanies = (companiesArray: any[]) => {
     if (!company?.name) return;
 
     const existing = companyMap.get(company.name);
+    // Ensure new company has valid structure
+    const cloned = deepClone(company);
     const newCompany = {
-      variables: {},
-      sources: [],
-      ...deepClone(company), // Ensure default values
+      ...cloned,
+      variables: cloned.variables || {},
+      sources: cloned.sources || [],
     };
 
-    newCompany.variables = newCompany.variables || {};
-    existing.variables = existing?.variables || {};
-
-    // First occurrence
+    // First occurrence: simply set and move on
     if (!existing) {
       companyMap.set(company.name, newCompany);
       return;
     }
 
-    // Merge numerical values in "variables"
+    // --- Merge Variables (with year-based support and numeric sums) ---
     Object.entries(newCompany.variables).forEach(([key, value]) => {
-      const varValue = (value as any)?.value || value;
-      if (typeof varValue === 'number') {
-        existing.variables[key] = (existing.variables[key] || 0) + varValue;
+      // In the correction snippet, `value` might be:
+      //   - a number
+      //   - an object with .value
+      //   - an object keyed by years
+      const varValue = (value as any)?.value ?? value;
+      // Ensure existing "variables[key]" is an object (so we can store year-based merges)
+      existing.variables[key] = existing.variables[key] || {};
+
+      // If varValue is an object, check if it's year-based
+      if (typeof varValue === 'object') {
+        Object.entries(varValue).forEach(([year, yearValue]) => {
+          // Merge only if the key is a 4-digit year
+          if (/^\d{4}$/.test(year)) {
+            existing.variables[key][year] = mergeValues(
+              existing.variables[key][year],
+              yearValue
+            );
+          }
+        });
       } else {
-        existing.variables[key] = varValue;
+        // Otherwise, treat it as a top-level numeric or single value
+        existing.variables[key].value = mergeValues(
+          existing.variables[key]?.value,
+          varValue
+        );
       }
     });
-    
-    companyMap.set(company.name, {...existing, ...newCompany});
-    // Merge dates
+
+    // --- Merge Sources ---
+    existing.sources = [...(existing.sources || []), ...(newCompany.sources || [])];
+
+    // --- Merge Dates (with proper date-sorting) ---
     existing.dates = Array.from(
-      new Set([...existing.dates, ...newCompany.dates])
+      new Set([...(existing.dates || []), ...(newCompany.dates || [])])
     ).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
-    // Merge other fields (e.g., lastUpdated)
+    // --- Merge lastUpdated ---
     existing.lastUpdated = [existing.lastUpdated, newCompany.lastUpdated]
       .filter(Boolean)
       .sort()
       .pop();
+
+    // Re-store in the Map
+    companyMap.set(company.name, existing);
   });
 
   return Array.from(companyMap.values());
+};
+
+// ---------------------------------------------------
+// Helper function to merge values safely
+// (Sums numeric values, otherwise uses the newest
+// non-undefined value)
+const mergeValues = (existingVal: any, newVal: any) => {
+  if (typeof existingVal === 'number' && typeof newVal === 'number') {
+    return existingVal + newVal;
+  }
+  if (newVal !== undefined && newVal !== null) {
+    return newVal;
+  }
+  return existingVal;
 };
 
 // ==================================================================
@@ -3527,7 +3740,7 @@ async function extractTextsFromFiles(
             .filter((item): item is TextItem => 'str' in item)
             .map((item) => item.str)
             .join(' ');
-            text += `[PAGE_START:${i} fileName:${node.name}]${pageText}[PAGE_END:${i}]\n`;
+          text += `[PAGE_START:${i} fileName:${node.name}]${pageText}[PAGE_END:${i}]\n`;
         }
 
         extracted = text;
@@ -3740,7 +3953,7 @@ async function retrieveInfoFromTexts(
             // Map 'company_name' to 'name' if present
             companies = companies.map((company: any) => ({
               ...company,
-              name: company.company_name || company.name // Add this line
+              name: company.company_name || company.name
             }));
             allCompanies = mergeConsolidatedCompanies([allCompanies, companies]);
           } catch (parseErr) {
@@ -3808,7 +4021,6 @@ export async function analyzeFiles(
   logId:string,
 ) {
   try {
-    //debugger; // Debugger statement for development
     setIsAnalyzing(true);
     setProgress(0);
     setProcessedFiles(0);
@@ -3859,12 +4071,11 @@ export async function analyzeFiles(
       finalExtractedCompanies = await retrieveInfoFromTextsRefactored(
         newExtractedTexts,
         options.infoRetrievalModel,
-        logId 
+        logId
       );
       // Now do a single setState:
       setExtractedCompanies(finalExtractedCompanies);
     }
-
 
   } catch (error) {
     console.error('Processing error:', error);
@@ -3873,7 +4084,6 @@ export async function analyzeFiles(
     setProcessingPhase('idle');
   }
 }
-
 
 export const handleConsolidateCompanies = async (
   sessionId: string,
@@ -3885,220 +4095,226 @@ export const handleConsolidateCompanies = async (
   setIsConsolidating: Dispatch<SetStateAction<boolean>>,
   setLlmConsolidationDebug: Dispatch<SetStateAction<{ prompt: string; response: string }[]>>,
   setSuccessMessage: Dispatch<SetStateAction<string>>,
-  mergeConsolidatedCompanies: (companiesArray: any[]) => any[],
+  mergeCompaniesFn: (companiesArray: any[]) => any[],
   infoRetrievalModel: string,
   router: any,
+  onProgress?: (processed: number, total: number, currentFile: string) => void,
+  onError?: (filePath: string) => void,
 ): Promise<void> => {
   setIsConsolidating(true);
 
-
-  
   try {
-    
-    const modelConfig = getModelConfig(infoRetrievalModel);
-    const allCompanies = Object.values(extractedCompanies).flat();
-    if (allCompanies.length === 0) {
+    const allFilePaths = Object.keys(extractedCompanies);
+    const total = allFilePaths.length;
+    let processed = 0;
+    if (allFilePaths.length === 0) {
       throw new Error('No companies extracted - cannot consolidate empty data');
     }
 
-    const MAX_TOKENS = modelConfig.contextWindow;
-
-    const chunks: any[][] = [];
-    let currentChunk: any[] = [];
-    let currentTokens = 0;
-
-    const basePrompt = getConsolidationPrompt([]);
-    const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
-    const availableTokensPerChunk = MAX_TOKENS - baseTokens - 8000;
-
-    for (const company of allCompanies) {
-      const companyText = JSON.stringify(company);
-      const entryTokens = estimateTokens(companyText) + 50;
-
-      if (entryTokens > availableTokensPerChunk) {
-        console.error('Oversized company:', company.name);
-        continue;
-      }
-
-      if (currentTokens + entryTokens > availableTokensPerChunk) {
-        chunks.push(currentChunk);
-        currentChunk = [];
-        currentTokens = 0;
-      }
-
-      currentChunk.push(company);
-      currentTokens += entryTokens;
-    }
-
-    if (currentChunk.length > 0) {
-      chunks.push(currentChunk);
-    }
-
+    // Prepare to log each LLM call (prompt + response):
     const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-    const MAX_RETRIES = 2;
 
-    const processChunk = async (chunk: any[], attempt = 0): Promise<any[]> => {
+    //-------------------------------------------------------------------
+    // 1) PER-FILE CONSOLIDATION
+    //-------------------------------------------------------------------
+    // We'll gather each file's consolidated results in an array of arrays
+    const perFileConsolidations: CompanyInfo[][] = [];
+    // Initialize progress
+    onProgress?.(0, total, '');
+    for (const filePath of allFilePaths) {
       try {
-        const chunkPrompt = `
-          ${getConsolidationPrompt(chunk)}
-          
-          Additionally, analyze and establish ownership relationships between entities using this logic:
-          - Funds typically own companies
-          - Funds-of-funds own other funds
-          - Maintain original source metadata for each data point
-          - Output should include 'parent' field and 'sources' array
-        `;
-    
+        const companiesForFile = extractedCompanies[filePath] || [];
+        if (!companiesForFile.length) {
+          perFileConsolidations.push([]); // nothing to consolidate
+          continue;
+        }
+
+        // Build the LLM prompt for just this file’s companies
+        const filePrompt = getIntermediateConsolidationPrompt({ companies: companiesForFile });
+
+        // Try calling the LLM
         const res = await fetch('/api/llm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: chunkPrompt,
+            prompt: filePrompt,
             model: infoRetrievalModel,
             format: 'json',
             requestType: 'consolidation',
-            logId: sessionId,
+            logId: sessionId, // for logging
           }),
         });
-    
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-       
+
+        if (!res.ok) {
+          const details = await res.text();
+          throw new Error(`Consolidation failed (file-level) for ${filePath}: ${details}`);
+        }
+
         const { content } = await res.json();
-        const cleanedContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-        let parsed;
+        const cleaned = content.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+        let fileConsolidated: CompanyInfo[] = [];
         try {
-
-          parsed = JSON.parse(cleanedContent);
-
-          // Add validation for JSON structure
-          if (!parsed.companies || !Array.isArray(parsed.companies)) {
-            throw new Error('Invalid response format - missing companies array');
+          const parsed = JSON.parse(cleaned);
+          if (parsed && Array.isArray(parsed.companies)) {
+            fileConsolidated = parsed.companies;
+          } else if (Array.isArray(parsed)) {
+            fileConsolidated = parsed;
           }
-    
-          const companiesArray = parsed.companies;
+        } catch (parseErr) {
+          console.error(`File-level parse error [${filePath}]:`, parseErr);
+        }
 
-          // Additional validation for company structure
-          const isValid = companiesArray.every((c: any) => 
-            c.name && c.variables && typeof c.variables === 'object'
-          );
-          
-          if (!isValid) {
-            throw new Error('Invalid company structure in response');
-          }
-    
-          // Now apply your mapping logic to each company
-          const mappedCompanies = companiesArray.map((company: any) => ({
-            ...company,
-            // Safely map over 'company.variables' if it exists
-            variables: Object.fromEntries(
-              Object.entries(company.variables || {}).map(([key, value]: [string, any]) => [
-                key,
-                {
-                  ...value,
-                  sources: value.sources?.map((source: any) => ({
-                    filePath: source.filePath,
-                    pageNumber: source.pageNumber,
-                    confidence: source.confidence || 0.9,
-                  })) || [],
-                },
-              ])
-            ),
-          }));
-    
-          // Warn if a company references a parent that doesn't exist in the same chunk
-          mappedCompanies.forEach((company: any) => {
-            if (company.parent && !chunk.some((c: any) => c.name === company.parent)) {
-              console.warn(`Orphaned parent reference: ${company.parent}`);
-              delete company.parent;
-            }
-          });
-    
-          consolidationDebug.push({ prompt: chunkPrompt, response: content });
-          return mappedCompanies;
-    
-        } catch (parseError) {
-          console.error(`JSON Parse Error: ${(parseError as Error).message}`);
-          console.error('Problematic Response:', cleanedContent);  // Add debug logging
-          throw new Error('Invalid JSON response from LLM');
-        }
-    
-      } 
-      catch (error) {
-        
-        if (attempt < MAX_RETRIES) {
-          // Retry with backoff
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          return processChunk(chunk, attempt + 1);
-        }
-        console.error('Chunk processing failed after retries:', error);
-        return [];
+        // Save debug info
+        consolidationDebug.push({
+          prompt: filePrompt,
+          response: content,
+        });
+
+        // Store the (already consolidated) array
+        perFileConsolidations.push(fileConsolidated);
+
+      } catch (error) {
+        console.error(`Error processing ${filePath}:`, error);
+        onError?.(filePath);
       }
-    };
-    
-    
 
-    let consolidatedResults: any[] = [];
-    for (const chunk of chunks) {
-      const chunkResults = await processChunk(chunk);
-      consolidatedResults = mergeConsolidatedCompanies([
-        ...consolidatedResults,
-        ...chunkResults,
-      ]);
+      processed++;
+      onProgress?.(processed, total, filePath);
     }
 
-    if (consolidatedResults.length === 0) {
-      throw new Error('Consolidation produced no valid results');
+    //-------------------------------------------------------------------
+    // 2) GLOBAL CONSOLIDATION (all files combined in chunk(s))
+    //-------------------------------------------------------------------
+    // Flatten all per-file consolidated data
+    onProgress?.(total, total, 'Final global consolidation...');
+    const allCompaniesCombined: CompanyInfo[] = perFileConsolidations.flat();
+    if (allCompaniesCombined.length === 0) {
+      throw new Error('No consolidated data produced at file-level. Stopping.');
     }
 
-    const buildOwnershipTree = (companies: ConsolidatedCompany[]) => {
-      const map = new Map<string, ConsolidatedCompany>();
-      companies.forEach((c) => map.set(c.name, c));
-      companies.forEach((company) => {
-        if (typeof company.parent === 'string' && map.has(company.parent)) {
-          const parent = map.get(company.parent)!;
-          parent.children = parent.children || [];
-          parent.children.push(company);
-          company.ownershipPath = [...(parent.ownershipPath || []), parent.name];
-        }
+    // Use chunking to avoid token limit issues
+    const modelConfig = getModelConfig(infoRetrievalModel);
+    const maxTokens = modelConfig.contextWindow;
+    const basePrompt = getConsolidationPrompt([]);
+    const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
+    const availableTokens = maxTokens - baseTokens - modelConfig.reservedCompletionTokens;
+
+    // Break final data into manageable chunks
+    const finalChunks: CompanyInfo[][] = [];
+    let currentChunk: CompanyInfo[] = [];
+    let currentTokenCount = 0;
+
+    for (const c of allCompaniesCombined) {
+      const cText = JSON.stringify(c);
+      const cTokens = estimateTokens(cText);
+
+      // If single item is oversize, skip or handle separately
+      if (cTokens > availableTokens) {
+        console.warn(`Skipping oversize company: ${c.name}`);
+        continue;
+      }
+
+      // If adding c would exceed the chunk limit, push current chunk & start new
+      if (currentTokenCount + cTokens > availableTokens) {
+        finalChunks.push(currentChunk);
+        currentChunk = [];
+        currentTokenCount = 0;
+      }
+      currentChunk.push(c);
+      currentTokenCount += cTokens;
+    }
+
+    if (currentChunk.length > 0) {
+      finalChunks.push(currentChunk);
+    }
+
+    // We'll accumulate the final globally consolidated array here
+    // and treat it as ConsolidatedCompany[] after merging
+    let finalConsolidated: ConsolidatedCompany[] = [];
+
+    // Helper to call the LLM for each chunk
+    async function consolidateChunk(companiesChunk: CompanyInfo[]): Promise<CompanyInfo[]> {
+      const chunkPrompt = getConsolidationPrompt({ companies: companiesChunk });
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: chunkPrompt,
+          model: infoRetrievalModel,
+          format: 'json',
+          requestType: 'consolidation',
+          logId: sessionId,
+        }),
       });
-      return companies.filter((c) => !c.parent);
-    };
 
-    let ownershipTreeResults = buildOwnershipTree(consolidatedResults);
+      if (!res.ok) {
+        const details = await res.text();
+        throw new Error(`Global chunk consolidation error: ${details}`);
+      }
 
-    setLlmConsolidationDebug(consolidationDebug);
+      const { content } = await res.json();
+      const cleaned = content.replace(/```json/gi, '').replace(/```/g, '').trim();
 
+      let chunkResult: CompanyInfo[] = [];
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (parsed && Array.isArray(parsed.companies)) {
+          chunkResult = parsed.companies;
+        } else if (Array.isArray(parsed)) {
+          chunkResult = parsed;
+        }
+      } catch (parseErr) {
+        console.error('Global-level parse error:', parseErr);
+      }
+
+      // Log debug
+      consolidationDebug.push({
+        prompt: chunkPrompt,
+        response: content,
+      });
+
+      return chunkResult;
+    }
+
+    // Consolidate each chunk individually, merging into finalConsolidated
+    for (const chunk of finalChunks) {
+      const chunkRes = await consolidateChunk(chunk);
+      // mergeCompaniesFn returns an array of "any", so we safely cast it
+      const merged = mergeCompaniesFn([finalConsolidated, chunkRes]) as ConsolidatedCompany[];
+      finalConsolidated = merged;
+    }
+
+    // 3) Save final to heavyData
+    // Ensure each item has defaults for the ConsolidatedCompany properties
     await saveHeavyData(sessionId, {
       fileTree,
       extractedTexts,
       summaries,
       extractedCompanies,
       rawResponses,
-      consolidatedCompanies: consolidatedResults,
+      consolidatedCompanies: finalConsolidated.map(company => ({
+        ...company,
+        dates: company.dates || [],
+        ownershipPath: company.ownershipPath || [],
+        parent: company.parent || null,
+        variables: company.variables || {},
+      })),
     });
 
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Consolidation chunks:', chunks);
-      console.log('Final merged companies:', consolidatedResults);
-      console.log('Token usage:', {
-        baseTokens,
-        perChunk: chunks.map((chunk) => ({
-          companies: chunk.length,
-          tokens: estimateTokens(JSON.stringify(chunk)),
-        })),
-      });
-    }
+    // 4) Store debug logs
+    setLlmConsolidationDebug(consolidationDebug);
 
+    // 5) Navigate to /companies
     router.push(`/companies?sessionId=${sessionId}`);
   } catch (error) {
-    console.error('Consolidation error:', error);
+    console.error('Error (two-step consolidation):', error);
+    // If something fails, we show a fallback
     router.push(`/companies?sessionId=${sessionId}&message=noData`);
   } finally {
     setIsConsolidating(false);
   }
 };
-
 
 // ==================================================================
 // 6) Additional Utilities
@@ -4149,9 +4365,8 @@ export function convertTree(nodes: FileNode[], sessionId: number | string): File
   });
 }
 
-
 /**
- * Toggles selection (selected/ unselected) for all files in the file tree.
+ * Toggles selection (selected/unselected) for all files in the file tree.
  */
 export const toggleAllFiles = (
   selected: boolean,
@@ -4205,7 +4420,6 @@ export function handleFileSelect(
   setSelectedFile(node);
 }
 
-
 export const openSaveModal = async (
   setNewUploadName: React.Dispatch<React.SetStateAction<string>>,
   setExistingUploadId: React.Dispatch<React.SetStateAction<number | null>>,
@@ -4214,156 +4428,154 @@ export const openSaveModal = async (
   setExistingUploads: React.Dispatch<React.SetStateAction<ExistingUpload[]>>,
   setFetchingUploads: React.Dispatch<React.SetStateAction<boolean>>,
 ): Promise<void> => {
-    setNewUploadName('');
-    setExistingUploadId(null);
-    setSelectedUploadOption('new');
-    try {
-      setFetchingUploads(true);
-      const res = await fetch('/api/uploads', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
-      });
-      if (!res.ok) throw new Error('Failed to fetch existing uploads');
-      const data = await res.json();
-      setExistingUploads(data.uploads || []);
-    } catch (err) {
-      console.error('Error fetching uploads:', err);
-      setExistingUploads([]);
-    } finally {
-      setFetchingUploads(false);
-      setShowSaveModal(true);
-    }
-  };
+  setNewUploadName('');
+  setExistingUploadId(null);
+  setSelectedUploadOption('new');
+  try {
+    setFetchingUploads(true);
+    const res = await fetch('/api/uploads', {
+      headers: { 'x-user-id': localStorage.getItem('userId') || '' },
+    });
+    if (!res.ok) throw new Error('Failed to fetch existing uploads');
+    const data = await res.json();
+    setExistingUploads(data.uploads || []);
+  } catch (err) {
+    console.error('Error fetching uploads:', err);
+    setExistingUploads([]);
+  } finally {
+    setFetchingUploads(false);
+    setShowSaveModal(true);
+  }
+};
 
-  export const closeSaveModal = (
-    setShowSaveModal: React.Dispatch<React.SetStateAction<boolean>>,
-  ) => {
+export const closeSaveModal = (
+  setShowSaveModal: React.Dispatch<React.SetStateAction<boolean>>,
+) => {
+  setShowSaveModal(false);
+};
+
+export const handleSaveConfirm = async (
+  newUploadName: string,
+  saveSession: (sessionName: string) => Promise<string>,
+  setShowSaveModal: React.Dispatch<React.SetStateAction<boolean>>,
+) => {
+  try {
+    // Get the session name from your state (you'll need to ensure this is populated)
+    const sessionName =
+      newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
+    const sessionId = await saveSession(sessionName);
+    localStorage.setItem('currentSessionId', sessionId);
     setShowSaveModal(false);
-  };
-
-  export const handleSaveConfirm = async (
-    newUploadName: string,
-    saveSession: (sessionName: string) => Promise<string>,
-    setShowSaveModal: React.Dispatch<React.SetStateAction<boolean>>,
-  ) => {
-    try {
-      // Get the session name from your state (you'll need to ensure this is populated)
-      const sessionName =
-        newUploadName.trim() || `Session ${new Date().toLocaleDateString()}`;
-      const sessionId = await saveSession(sessionName);
-      localStorage.setItem('currentSessionId', sessionId);
-      setShowSaveModal(false);
-    } catch (error) {
-      console.error('Error in handleSaveConfirm:', error);
-      alert('Error saving data: ' + (error as Error).message);
-    }
-  };
+  } catch (error) {
+    console.error('Error in handleSaveConfirm:', error);
+    alert('Error saving data: ' + (error as Error).message);
+  }
+};
 
 export async function saveSession(
-    sessionName: string,
-    fileTree: FileNode[],
-    extractedTexts: Record<string, string>,
-    summaries: Record<string, string>,
-    extractedCompanies: Record<string, CompanyInfo[]>,
-    rawResponses: Record<string, { prompt: string; response: string }>,
-    setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>,
-    setSuccessMessage: React.Dispatch<React.SetStateAction<string>>
-  ): Promise<string> {
-    const fileTreeWithBase64 = addBase64ToTree(fileTree);
+  sessionName: string,
+  fileTree: FileNode[],
+  extractedTexts: Record<string, string>,
+  summaries: Record<string, string>,
+  extractedCompanies: Record<string, CompanyInfo[]>,
+  rawResponses: Record<string, { prompt: string; response: string }>,
+  setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>,
+  setSuccessMessage: React.Dispatch<React.SetStateAction<string>>
+): Promise<string> {
+  const fileTreeWithBase64 = addBase64ToTree(fileTree);
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-id': localStorage.getItem('userId') || '',
+    },
+    body: JSON.stringify({ sessionName }),
+  });
+  if (!res.ok) throw new Error('Failed to save session');
+  const data = await res.json();
+  setCurrentSessionId(data.session_id);
+  await saveHeavyData(data.session_id, {
+    fileTree: fileTreeWithBase64,
+    extractedTexts,
+    summaries,
+    extractedCompanies,
+    rawResponses,
+  });
+
+  setCurrentSessionId(data.session_id);
+  setSuccessMessage('Session saved successfully!');
+  localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
+  return data.session_id;
+}
+
+export const handleLoadClick = async (
+  setAvailableSessions: React.Dispatch<React.SetStateAction<any[]>>,
+  setShowLoadModal: React.Dispatch<React.SetStateAction<boolean>>
+) => {
+  try {
     const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': localStorage.getItem('userId') || '',
-      },
-      body: JSON.stringify({ sessionName }),
+      headers: { 'x-user-id': localStorage.getItem('userId') || '' },
     });
-    if (!res.ok) throw new Error('Failed to save session');
     const data = await res.json();
-    setCurrentSessionId(data.session_id);
-    await saveHeavyData(data.session_id, {
-      fileTree: fileTreeWithBase64,
-      extractedTexts,
-      summaries,
-      extractedCompanies,
-      rawResponses,
-    });
-
-    setCurrentSessionId(data.session_id);
-
-    setSuccessMessage('Session saved successfully!');
-    localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
-    return data.session_id;
+    setAvailableSessions(data.sessions);
+    setShowLoadModal(true);
+  } catch {
+    alert('Error loading sessions');
   }
+};
 
- 
-  export const handleLoadClick = async (
-    setAvailableSessions: React.Dispatch<React.SetStateAction<any[]>>,
-    setShowLoadModal: React.Dispatch<React.SetStateAction<boolean>>
-  ) => {
-    try {
-      const res = await fetch('/api/sessions', {
-        headers: { 'x-user-id': localStorage.getItem('userId') || '' },
-      });
-      const data = await res.json();
-      setAvailableSessions(data.sessions);
-      setShowLoadModal(true);
-    } catch {
-      alert('Error loading sessions');
+export const confirmLoadSession = async (
+  sessionId: string,
+  setFileTree: Dispatch<SetStateAction<FileNode[]>>,
+  setRawResponses: Dispatch<SetStateAction<Record<string, { prompt: string; response: string }>>>,
+  setChatHistory: Dispatch<SetStateAction<string | null>>,
+  setExtractedTexts: Dispatch<SetStateAction<Record<string, string>>>,
+  setSummaries: Dispatch<SetStateAction<Record<string, string>>>,
+  setExtractedCompanies: Dispatch<SetStateAction<Record<string, CompanyInfo[]>>>,
+  setCurrentSessionId: Dispatch<SetStateAction<string | null>>,
+  router: any
+) => {
+  try {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      router.push('/login');
+      return;
     }
-  };
 
-  export const confirmLoadSession = async (
-    sessionId: string,
-    setFileTree: Dispatch<SetStateAction<FileNode[]>>,
-    setRawResponses: Dispatch<SetStateAction<Record<string, { prompt: string; response: string }>>>,
-    setChatHistory: Dispatch<SetStateAction<string | null>>,
-    setExtractedTexts: Dispatch<SetStateAction<Record<string, string>>>,
-    setSummaries: Dispatch<SetStateAction<Record<string, string>>>,
-    setExtractedCompanies: Dispatch<SetStateAction<Record<string, CompanyInfo[]>>>,
-    setCurrentSessionId: Dispatch<SetStateAction<string | null>>,
-    router: any
-  ) => {
-    try {
-      const userId = localStorage.getItem('userId');
-      if (!userId) {
-        router.push('/login');
-        return;
-      }
-
-      // 1) Confirm the session is available
-      const response = await fetch('/api/sessions', {
-        headers: { 'x-user-id': userId },
-      });
-      if (!response.ok) throw new Error('Failed to load session');
-      const data = await response.json();
-      if (!data.sessions || data.sessions.length === 0) {
-        alert('No session data found.');
-        return;
-      }
-
-      // 2) Fetch heavy data
-      const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
-      if (!heavyRes.ok) throw new Error('Failed to load heavy data');
-      const heavyData = await heavyRes.json();
-
-      setRawResponses(heavyData.rawResponses || {});
-
-      // 3) Rebuild the fileTree from base64
-      const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
-      setFileTree(rebuiltTree);
-
-      // 4) Restore chat history, extracted texts, summaries
-      setChatHistory(heavyData.chatHistory || []);
-      setExtractedTexts(heavyData.extractedTexts || {});
-      setSummaries(heavyData.summaries || {});
-      localStorage.setItem('currentSessionId', sessionId);
-      setCurrentSessionId(sessionId);
-      router.push(`/dashboard?sessionId=${sessionId}`); // Redirect to dashboard
-    } catch (error) {
-      console.error('Error loading session:', error);
-      alert('Error loading session: ' + (error as Error).message);
+    // 1) Confirm the session is available
+    const response = await fetch('/api/sessions', {
+      headers: { 'x-user-id': userId },
+    });
+    if (!response.ok) throw new Error('Failed to load session');
+    const data = await response.json();
+    if (!data.sessions || data.sessions.length === 0) {
+      alert('No session data found.');
+      return;
     }
-  };
+
+    // 2) Fetch heavy data
+    const heavyRes = await fetch(`/api/store-heavy-data?sessionId=${sessionId}`);
+    if (!heavyRes.ok) throw new Error('Failed to load heavy data');
+    const heavyData = await heavyRes.json();
+
+    setRawResponses(heavyData.rawResponses || {});
+
+    // 3) Rebuild the fileTree from base64
+    const rebuiltTree = convertTree(heavyData.fileTree || [], sessionId);
+    setFileTree(rebuiltTree);
+
+    // 4) Restore chat history, extracted texts, summaries
+    setChatHistory(heavyData.chatHistory || []);
+    setExtractedTexts(heavyData.extractedTexts || {});
+    setSummaries(heavyData.summaries || {});
+    localStorage.setItem('currentSessionId', sessionId);
+    setCurrentSessionId(sessionId);
+    router.push(`/dashboard?sessionId=${sessionId}`); // Redirect to dashboard
+  } catch (error) {
+    console.error('Error loading session:', error);
+    alert('Error loading session: ' + (error as Error).message);
+  }
+};
 
 ----------------------------------------
 

@@ -44,6 +44,11 @@ import {getConsolidationPrompt, buildFileTree, getAllFiles, processZip, processF
 
 
 export default function Dashboard() {
+    // Add these state variables near other useState hooks
+  const [consolidateProgress, setConsolidateProgress]               = useState(0);
+  const [totalFilesToConsolidate, setTotalFilesToConsolidate]       = useState(0);
+  const [currentConsolidatingFile, setCurrentConsolidatingFile]     = useState('');
+  const [errorFiles, setErrorFiles]                                 = useState<string[]>([]);
   const router                                                      = useRouter();
   const formRef                                                     = useRef<HTMLFormElement | null>(null);
   const [rawResponses, setRawResponses]                             = useState<Record<string, { prompt: string; response: string }>>({});
@@ -283,39 +288,87 @@ export default function Dashboard() {
           />
         )}
 
-        {/* Consolidate Companies Button */}
-        {fileTree.length > 0 && (
-          <button
-            onClick={() => {
-              if (!currentSessionId) {
-                alert('Please save the session first');
-                return;
-              }
-              handleConsolidateCompanies(
-                currentSessionId,
-                fileTree,
-                extractedTexts,
-                summaries,
-                extractedCompanies,
-                rawResponses,
-                setIsConsolidating,
-                setLlmConsolidationDebug,
-                setSuccessMessage,
-                mergeConsolidatedCompanies,
-                selectedInfoRetrievalModel, 
-                router,
-              );
-            }}
-            disabled={isConsolidating || !currentSessionId}
-            className={`px-4 py-2 rounded ${
-              isConsolidating || !currentSessionId
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
-          >
-            {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
-          </button>
-        )}
+<div className="bg-white p-4 rounded-lg shadow-sm mb-6">
+  <div className="flex items-center justify-between mb-4">
+    <div>
+      <button
+        onClick={() => {
+          if (!currentSessionId) {
+            alert('Please save the session first');
+            return;
+          }
+          setErrorFiles([]);
+          handleConsolidateCompanies(
+            currentSessionId,
+            fileTree,
+            extractedTexts,
+            summaries,
+            extractedCompanies,
+            rawResponses,
+            setIsConsolidating,
+            setLlmConsolidationDebug,
+            setSuccessMessage,
+            mergeConsolidatedCompanies,
+            selectedInfoRetrievalModel,
+            router,
+            (processed, total, currentFile) => {
+              setConsolidateProgress(processed);
+              setTotalFilesToConsolidate(total);
+              setCurrentConsolidatingFile(currentFile);
+            },
+            (errorFile) => {
+              setErrorFiles(prev => [...prev, errorFile]);
+            }
+          );
+        }}
+        disabled={isConsolidating || !currentSessionId}
+        className={`px-4 py-2 rounded ${
+          isConsolidating || !currentSessionId
+            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            : 'bg-blue-600 text-white hover:bg-blue-700'
+        }`}
+      >
+        {isConsolidating ? 'Consolidating...' : 'Consolidate Companies'}
+      </button>
+    </div>
+  </div>
+
+  {isConsolidating && (
+    <div className="mt-4">
+      <div className="mb-2 flex justify-between text-sm text-gray-600">
+        <span>
+          Processing: {currentConsolidatingFile || 'Initializing...'}
+        </span>
+        <span>
+          {consolidateProgress} / {totalFilesToConsolidate}
+        </span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-2.5">
+        <div
+          className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+          style={{
+            width: `${(consolidateProgress / Math.max(totalFilesToConsolidate, 1)) * 100}%`
+          }}
+        ></div>
+      </div>
+
+      {errorFiles.length > 0 && (
+        <div className="mt-4 p-3 bg-red-50 rounded-lg">
+          <h4 className="font-semibold text-red-600 mb-2">
+            Errors occurred in these files:
+          </h4>
+          <ul className="list-disc pl-5 space-y-1">
+            {errorFiles.map((file, index) => (
+              <li key={index} className="text-sm text-red-500">
+                {file.split('/').pop()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )}
+</div>
 
         {/* Toggle Button for Debug Info */}
         <button
