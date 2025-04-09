@@ -8,7 +8,11 @@ appears in different documents.
 
 I need your help with the following things
 
-1. I am not seeing the name of the jkson file where the LLM response is stored. I need to know where that is
+1. The data that is displayed in /companies/page.tsx I need it to be stored somehow. You can decide if either as  json (which makes sense since we can already see the json raw data) or as you think its more convenient. 
+The reason for this is that this data needs to be also accessed through an API, so the user after having this in the website can also accessed that data through an API for his own applications. 
+In order for the server to know the user requesting the data, I need in the settings page to have an API key for this. 
+2. There might be a lot of json raw files being nicely displayed in companies/page.tsx, so I need the option to press a button next to every number being displayed
+and this automatically will copy to the clipboard the exact url required to access that information through the API.
 
 Here is the file structure of the project
 
@@ -121,7 +125,7 @@ the file you need to be extremely clear where I should incorporate that code.
 
 Here are the files you need 
 
-File: lib\modelConfig.ts
+File: lib/modelConfig.ts
 ----------------------------------------
 export type ModelConfig = {
     contextWindow: number;
@@ -165,7 +169,7 @@ export type ModelConfig = {
   }
 ----------------------------------------
 
-File: lib\prompts.ts
+File: lib/prompts.ts
 ----------------------------------------
 // lib/prompts.ts
 
@@ -342,7 +346,7 @@ per document only. DO NOT merge with data from other documents yet.
 `.trim();
 ----------------------------------------
 
-File: lib\utils.tsx
+File: lib/utils.tsx
 ----------------------------------------
 // lib/utils.ts
 export function formatCIK(cik: string): string {
@@ -356,69 +360,86 @@ export function cn(...classes: (string | undefined)[]) {
 
 ----------------------------------------
 
-File: app\favicon.ico
+File: app/favicon.ico
 ----------------------------------------
 Error reading file: 'utf-8' codec can't decode byte 0x96 in position 50: invalid start byte
 ----------------------------------------
 
-File: app\globals.css
+File: app/types.ts
 ----------------------------------------
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+// types.ts
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+export interface CompanySource {
+  filePath: string;
+  pageNumber?: number;
+  extractionDate: string;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+export type CompanyInfo = {
+  name: string;
+  sector?: string;
+  years?: number[];
+  variables?: Record<string, VariableData>;
+  sources?: CompanySource[];
+};
+
+export interface VariableData {
+  value?: number | string;
+  currency?: string;
+  unit?: string;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+export interface ConsolidatedCompany extends CompanyInfo {
+  variables: Record<string, VariableData>;
+  dates: string[];
+  children?: ConsolidatedCompany[];
+  ownershipPath: string[];
+  parent: ConsolidatedCompany | null;
+
+  // Optional if dealing with funds
+  type?: 'company' | 'fund';
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
 }
 
-/* Bounce-in animation */
-@keyframes bounceIn {
-  0% {
-    transform: translateY(-50px);
-    opacity: 0;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
+export interface SessionSummary {
+  session_id: number;
+  session_name: string;
+  created_at: string;
+  file_count: number;
 }
 
-.animate-bounce-in {
-  animation: bounceIn 0.5s ease-out forwards;
+export interface SessionData {
+  session_name: string;
+  fileTree?: FileNode[];
+  extractedTexts: Record<string, string>;
+  summaries: Record<string, string>;
+  rawResponses: Record<string, { prompt: string; response: string }>;
+  consolidatedCompanies?: ConsolidatedCompany[];
 }
 
-@keyframes fadeInUp {
-  0% {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+export interface FileNode {
+  name: string;
+  type: 'file' | 'folder';
+  children?: FileNode[];
+  content?: string;
+  base64Data?: string;
+  fullPath?: string;
+  selected?: boolean;
+  highlighted?: boolean;
+  localPath?: string; // Added for file storage tracking
 }
 
-.animate-fadeInUp {
-  animation: fadeInUp 0.8s ease-out;
-}
+export type CompanyMap = Map<string, ConsolidatedCompany>;
+export type ExtractedTexts = Record<string, string>;
+export type FileTree = FileNode[];
 
 ----------------------------------------
 
-File: app\layout.tsx
+File: app/layout.tsx
 ----------------------------------------
 // app/layout.tsx
 
@@ -460,7 +481,7 @@ export default function RootLayout({
 
 ----------------------------------------
 
-File: app\page.tsx
+File: app/page.tsx
 ----------------------------------------
 // app/page.tsx
 import Navbar from '@/components/Navbar';
@@ -622,1958 +643,588 @@ export default function Home() {
 }
 ----------------------------------------
 
-File: app\types.ts
+File: app/globals.css
 ----------------------------------------
-// types.ts
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-export interface CompanySource {
-  filePath: string;
-  pageNumber?: number;
-  extractionDate: string;
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
 }
 
-export type CompanyInfo = {
-  name: string;
-  sector?: string;
-  years?: number[];
-  variables?: Record<string, VariableData>;
-  sources?: CompanySource[];
-};
-
-export interface VariableData {
-  value?: number | string;
-  currency?: string;
-  unit?: string;
-}
-
-export interface ConsolidatedCompany extends CompanyInfo {
-  variables: Record<string, VariableData>;
-  dates: string[];
-  children?: ConsolidatedCompany[];
-  ownershipPath: string[];
-  parent: ConsolidatedCompany | null;
-
-  // Optional if dealing with funds
-  type?: 'company' | 'fund';
-  investments?: Array<{
-    company: string;
-    ownershipPercentage?: number;
-  }>;
-  subsidiaries?: string[];
-}
-
-export interface SessionSummary {
-  session_id: number;
-  session_name: string;
-  created_at: string;
-  file_count: number;
-}
-
-export interface SessionData {
-  session_name: string;
-  fileTree?: FileNode[];
-  extractedTexts: Record<string, string>;
-  summaries: Record<string, string>;
-  rawResponses: Record<string, { prompt: string; response: string }>;
-  consolidatedCompanies?: ConsolidatedCompany[];
-}
-
-export interface FileNode {
-  name: string;
-  type: 'file' | 'folder';
-  children?: FileNode[];
-  content?: string;
-  base64Data?: string;
-  fullPath?: string;
-  selected?: boolean;
-  highlighted?: boolean;
-  localPath?: string; // Added for file storage tracking
-}
-
-export type CompanyMap = Map<string, ConsolidatedCompany>;
-export type ExtractedTexts = Record<string, string>;
-export type FileTree = FileNode[];
-
-----------------------------------------
-
-File: app\api\account-data\route.tsx
-----------------------------------------
-// app/api/account-data/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    // e.g. "AccountsPayableCurrent"
-    const accountParam = searchParams.get("account") ?? ""
-    // e.g. "2022" or "2023"
-    const yearParam = searchParams.get("year") ?? ""
-
-    if (!accountParam) {
-      return NextResponse.json({ error: "Missing 'account' query param" }, { status: 400 })
-    }
-
-    // Remote endpoint might be something like:
-    //    /all_data_for_account?account=AccountsPayableCurrent&year=2022&api_token=...
-    const remoteUrl = `${BASE_URL}/all_data_for_account?account=${accountParam}&year=${yearParam}&api_token=${API_TOKEN}`
-
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/account-data route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
   }
 }
 
-----------------------------------------
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+}
 
-File: app\api\all-accounts\route.tsx
-----------------------------------------
-// app/api/all-accounts/route.ts
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN  
-
-export async function GET() {
-  try {
-    // Build remote URL
-    const remoteUrl = `${BASE_URL}/all_accounts?api_token=${API_TOKEN}`
-    console.log("Fetching from:", remoteUrl) 
-    // Server-to-server fetch => no CORS issue
-    const response = await fetch(remoteUrl)
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/all-accounts route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+/* Bounce-in animation */
+@keyframes bounceIn {
+  0% {
+    transform: translateY(-50px);
+    opacity: 0;
   }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-bounce-in {
+  animation: bounceIn 0.5s ease-out forwards;
+}
+
+@keyframes fadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.8s ease-out;
 }
 
 ----------------------------------------
 
-File: app\api\auth\login\route.tsx
+File: app/settings/page.tsx
 ----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    const userRes = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    client.release();
-    if (userRes.rowCount === 0) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    const user = userRes.rows[0];
-    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!passwordMatch) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-    // Return user data (do not include the password hash)
-    const userData = { user_id: user.user_id, email: user.email };
-    return NextResponse.json({ success: true, user: userData }, { status: 200 });
-  } catch (error) {
-    console.error('Error in login:', error);
-    return NextResponse.json({ error: 'Error logging in' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\auth\signup\route.tsx
-----------------------------------------
-'use server';
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import bcrypt from 'bcryptjs';
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { email, password, company, reason } = body;
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
-    }
-    const client = await pool.connect();
-    // Check if the user already exists
-    const userCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userCheck && userCheck.rowCount !== null && userCheck.rowCount > 0) {
-      client.release();
-      return NextResponse.json({ error: 'User already exists' }, { status: 400 });
-    }
-    // Hash the password
-    const salt = bcrypt.genSaltSync(10);
-    const password_hash = bcrypt.hashSync(password, salt);
-    // Insert new user
-    const result = await client.query(
-      `INSERT INTO users (email, password_hash, company, reason) 
-       VALUES ($1, $2, $3, $4) RETURNING user_id, email`,
-      [email, password_hash, company, reason]
-    );
-    client.release();
-    return NextResponse.json({ success: true, user: result.rows[0] }, { status: 200 });
-  } catch (error) {
-    console.error('Error in signup:', error);
-    return NextResponse.json({ error: 'Error signing up' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\company-facts\route.tsx
-----------------------------------------
-// app/api/company-facts/route.ts
-
-import { NextResponse } from "next/server"
-
-// We'll assume you're using .env for the base URL and token.
-// If not, you can hardcode them here.
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    // 1) Extract query params from the incoming request
-    const { searchParams } = new URL(request.url)
-    // e.g. "320193"
-    const cik = searchParams.get("cik") ?? ""
-
-    // 2) Build the remote URL
-    const remoteUrl = `${BASE_URL}/company_facts?cik=${cik}&api_token=${API_TOKEN}`
-
-    console.log("Fetching from:", remoteUrl)
-
-    // 3) Fetch from the external API (server-to-server, no CORS issues here)
-    const response = await fetch(remoteUrl, {
-      method: "GET",
-    })
-
-    if (!response.ok) {
-      // e.g. 404, 500, ...
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    // 4) Return the JSON response to the client
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app\api\countTokens\route.tsx
-----------------------------------------
-
-
-----------------------------------------
-
-File: app\api\files\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const formData = await request.formData();
-    const files = formData.getAll('files') as File[];
-    
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
-    }
-
-    const insertedFiles = [];
-    
-    for (const file of files) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const result = await client.query(
-        `INSERT INTO files 
-         (user_id, file_name, file_type, file_data, session_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING file_id`,
-         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
-      );
-      insertedFiles.push(result.rows[0].file_id);
-    }
-
-    return NextResponse.json({ success: true, fileIds: insertedFiles });
-  } catch (error) {
-    console.error('File upload error:', error);
-    return NextResponse.json({ error: 'File upload failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query(`SELECT * FROM files;`);
-    client.release();
-
-    return NextResponse.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error fetching files' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\files\[fileId]\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-
-export async function GET(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const fileId = parseInt(params.fileId);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    const result = await client.query(
-      `SELECT file_name, file_type, file_data 
-       FROM files 
-       WHERE file_id = $1`,
-      [fileId]
-    );
-
-    if (result.rowCount === 0) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    const file = result.rows[0];
-    return new NextResponse(file.file_data, {
-      headers: {
-        'Content-Type': file.file_type,
-        'Content-Disposition': `attachment; filename="${file.file_name}"`
-      }
-    });
-  } catch (error) {
-    console.error('File download error:', error);
-    return NextResponse.json({ error: 'File download failed' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { fileId: string } }
-) {
-  let client;
-  try {
-    client = await pool.connect();
-    const fileId = parseInt(params.fileId, 10);
-    if (isNaN(fileId)) {
-      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
-    }
-
-    // Remove any extractions for this file, then remove the file itself
-    await client.query('DELETE FROM extractions WHERE file_id = $1', [fileId]);
-    await client.query('DELETE FROM files WHERE file_id = $1', [fileId]);
-
-    client.release();
-    return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error('Error deleting file:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error deleting file' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\financial-data\route.tsx
-----------------------------------------
-// app/api/financial-data/route.ts
-import { NextResponse } from "next/server"
-import { Pool } from 'pg';
-
-const pool = new Pool({
-    port: 5432,
-    host: 'localhost',
-    user: 'postgres',
-    password: '1234',
-    database: 'sec_financial_data',
-});
-
-export async function GET(request: Request) {
-  try {
-    // 1) Parse query params from the URL
-    const { searchParams } = new URL(request.url)
-    const nameParam = (searchParams.get("name") ?? "").trim().toLowerCase()
-    const tickerParam = (searchParams.get("ticker") ?? "").trim().toLowerCase()
-    const cikParam = (searchParams.get("cik") ?? "").trim()
-
-    // 2) Prepare placeholders.
-    //    For name, we use a LIKE pattern if it's not empty: '%<name>%'
-    //    For ticker, we do an exact match but case-insensitive, so we store it in lowercase and compare with LOWER(t.ticker).
-    //    For cik, we do an exact match.
-    const nameFilter = nameParam ? `%${nameParam}%` : ""
-    const tickerFilter = tickerParam // empty if none provided
-    const cikFilter = cikParam // empty if none provided
-
-    // 3) Connect to the database
-    const client = await pool.connect()
-
-    // 4) Build and run the query
-    //    Explanation:
-    //    - LEFT JOIN `tickers` so we can gather possible tickers per `companies` row
-    //    - Filter with a combination of name, ticker, and/or cik
-    //    - If the corresponding parameter is empty, we skip that filter
-    //    - Group by c.cik, c.name so we can do array_agg on the tickers
-    const sql = `
-      SELECT
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) AS tickers
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE
-        ($1 = '' OR LOWER(c.name) LIKE $1)
-        AND ($2 = '' OR LOWER(t.ticker) = $2)
-        AND ($3 = '' OR c.cik = $3)
-      GROUP BY c.cik, c.name
-      ORDER BY c.name ASC
-      LIMIT 50;
-    `
-
-    const result = await client.query(sql, [
-      nameFilter,
-      tickerFilter,
-      cikFilter,
-    ])
-
-    client.release()
-
-    // 5) Return JSON response
-    return NextResponse.json(result.rows)
-  } catch (error) {
-    console.error("Error in /api/financial-data:", error)
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    )
-  }
-}
-
-----------------------------------------
-
-File: app\api\llm\route.tsx
-----------------------------------------
-// File: app/api/llm/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';  // <-- For hashing our prompt
-
-export const dynamic = 'force-dynamic';
-
-const DEBUG_MODE_CREATE = process.env.NEXT_PUBLIC_DEBUG_MODE_CREATE === 'true';
-const DEBUG_LOG_FILE = 'debug-responses.jsonl';
-
-interface DeepSeekError {
-  error: {
-    message: string;
-    type: string;
-    code: string;
-  };
-}
-
-/**
- * Generate a SHA256-based cache key from the request parameters.
- * You can include whatever fields you want to ensure uniqueness.
- */
-function generateCacheKey({
-  model,
-  prompt,
-  requestType,
-  context
-}: {
-  model: string;
-  prompt: string;
-  requestType?: string;
-  context?: string;
-}): string {
-  // Combine everything into a single string
-  const raw = `${model}__${requestType ?? ''}__${context ?? ''}__${prompt}`;
-  return crypto.createHash('sha256').update(raw).digest('hex');
-}
-
-/**
- * Returns the full file path for a given hash key.
- * We store in /data/cache by default; create that folder if it doesn’t exist.
- */
-function getCacheFilePath(hashKey: string): string {
-  const cacheDir = path.join(process.cwd(), 'data', 'cache');
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-  }
-  return path.join(cacheDir, `${hashKey}.json`);
-}
-
-/**
- * Attempts to read a cached response. Returns `null` if not found or parsing fails.
- */
-function readFromCache(hashKey: string): { content: string; tokensUsed: number; responseTime: number } | null {
-  const filePath = getCacheFilePath(hashKey);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(raw);
-  } catch (err) {
-    console.error('Cache read/parse error:', err);
-    return null;
-  }
-}
-
-/**
- * Writes LLM response data to the cache as JSON.
- */
-function writeToCache(
-  hashKey: string,
-  data: { content: string; tokensUsed: number; responseTime: number }
-): void {
-  const filePath = getCacheFilePath(hashKey);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-}
-
-
-function logLLMCall({
-  prompt,
-  model,
-  requestType,
-  userId,
-  response,
-  error,
-  logId
-}: {
-  prompt: string;
-  model: string;
-  requestType: string;
-  userId: string | null;
-  response?: string;
-  error?: string;
-  logId?: string;
-}) {
-  try {
-    const logsDir = path.join(process.cwd(), 'logs'); 
-    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
-      
-    const logFile = path.join(logsDir, 'llm-logs.txt');
-    const timestamp = new Date().toISOString();
-
-    let logEntry = `[${timestamp}] ${model} ${requestType}\n`;
-    logEntry += `Prompt: ${prompt}\n`;
-    if (response) logEntry += `Response: ${response}\n`;
-    if (error) logEntry += `Error: ${error}\n`;
-    logEntry += '----------------------------------------\n';
-
-    fs.appendFileSync(logFile, logEntry, 'utf8');
-
-    // 2) Structured debug logging when in create mode
-    if (DEBUG_MODE_CREATE) {
-      const debugFile = path.join(logsDir, DEBUG_LOG_FILE);
-      const debugEntry = {
-        timestamp,
-        model,
-        requestType,
-        userId,
-        logId,
-        prompt,
-        response,
-        error
-      };
-      
-      fs.appendFileSync(
-        debugFile,
-        JSON.stringify(debugEntry) + '\n',
-        'utf8'
-      );
-    }
-  } catch (err) {
-    console.error('Failed to write LLM call log:', err);
-  }
-}
-
-export async function POST(req: Request) {
-  let body: any = {};
-  try {
-    body = await req.json();
-  } catch (error) {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const { prompt, context, history, model, format, requestType, logId, skipCache } = body || {};
-  if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
-  }
-
-  const userId = req.headers.get('x-user-id');
-  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
-
-  // === CACHING LOGIC BELOW ===
-  // Generate cache key regardless of skipCache to handle errors
-  const cacheKey = generateCacheKey({ model, prompt, requestType, context });
-  
-  // If skipCache is NOT set, check cache first
-  let cached = null;
-  if (!skipCache) {
-    cached = readFromCache(cacheKey);
-    if (cached) {
-      return NextResponse.json({
-        content: cached.content,
-        tokensUsed: cached.tokensUsed,
-        responseTime: cached.responseTime
-      });
-    }
-  }
-
-  // -------------
-  // For local dev/test: Mock response quickly
-  // -------------
-  if (DEVELOPMENT) {
-    // Log the call in dev mode anyway
-    logLLMCall({
-      prompt,
-      model: model || 'no-model',
-      requestType: requestType || 'unknown',
-      userId,
-      response: '[MOCKED] No actual LLM call made',
-      logId
-    });
-
-    await new Promise(res => setTimeout(res, 500));
-    return NextResponse.json({
-      content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
-      tokensUsed: 42,
-    });
-  }
-
-  // -------------
-  // Actual LLM call
-  // -------------
-  try {
-    if (model?.startsWith('deepseek:')) {
-      const deepseekKey = process.env.DEEPSEEK_API_KEY;
-      if (!deepseekKey) {
-        console.error('DeepSeek API key missing');
-        return NextResponse.json(
-          { error: 'DeepSeek API key not configured' },
-          { status: 500 }
-        );
-      }
-
-      const modelName = model.replace('deepseek:', '');
-      const messages = [
-        { role: 'system', content: context || 'You are a helpful assistant.' },
-        ...(Array.isArray(history) ? history : []),
-        { role: 'user', content: prompt },
-      ];
-
-      const requestPayload = {
-        model: modelName,
-        messages,
-        temperature: 0.0,
-        max_tokens: 8000,
-        stream: false,
-      };
-
-      const startTime = Date.now();
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${deepseekKey}`,
-        },
-        body: JSON.stringify(requestPayload),
-      });
-      const responseTime = Date.now() - startTime;
-      const responseText = await response.text(); // Get raw response text
-
-      if (!response.ok) {
-        console.error('DeepSeek API Error Details:', {
-          status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          body: responseText,
-        });
-        // Log the failed call
-        logLLMCall({
-          prompt,
-          model,
-          requestType: requestType || 'unknown',
-          userId,
-          error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
-          logId
-        });
-        return NextResponse.json(
-          { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
-          { status: 500 }
-        );
-      }
-
-      // Attempt to parse the JSON response from API
-      try {
-        const data = JSON.parse(responseText);
-        let content = '';
-
-        if (requestType === 'consolidation' || requestType === 'extract') {
-          // For structured data
-          const rawContent = data.choices?.[0]?.message?.content || '';
-          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
-        } else {
-          // Summaries, chat, etc.
-          content = data.choices?.[0]?.message?.content || '';
-        }
-
-        // Log the successful call
-        logLLMCall({
-          prompt,
-          model,
-          requestType: requestType || 'unknown',
-          userId,
-          response: content,
-          logId
-        });
-
-        // Write to cache only if skipCache is false AND parsing succeeded
-        if (!skipCache && cacheKey) {
-          writeToCache(cacheKey, {
-            content,
-            tokensUsed: data.usage?.total_tokens || 0,
-            responseTime
-          });
-        }
-
-        return NextResponse.json({
-          content,
-          tokensUsed: data.usage?.total_tokens || 0,
-          responseTime,
-        });
-      } catch (parseError) {
-        // Write raw response to cache for debugging even if skipCache is true
-        writeToCache(cacheKey, {
-          content: responseText,
-          tokensUsed: 0,
-          responseTime
-        });
-
-        logLLMCall({
-          prompt,
-          model,
-          requestType: requestType || 'unknown',
-          userId,
-          error: `Response JSON Parse Error: ${String(parseError)}`,
-          response: responseText,
-          logId
-        });
-
-        return NextResponse.json(
-          {
-            error: 'Failed to parse API response',
-            response: responseText,
-            cacheFileName: `${cacheKey}.json` // Include cache filename
-          },
-          { status: 500 }
-        );
-      }
-    }
-
-    // If we eventually supported openai: or other, handle here...
-    return NextResponse.json({ error: 'Unsupported model provider' }, { status: 400 });
-  } catch (error: any) {
-    // Log any top-level error
-    logLLMCall({
-      prompt,
-      model: model || 'unknown',
-      requestType: requestType || 'unknown',
-      userId,
-      error: String(error),
-      logId
-    });
-
-    console.error('LLM Processing Error:', error);
-    return NextResponse.json(
-      {
-        error: 'LLM processing failed',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    );
-  }
-}
-
-----------------------------------------
-
-File: app\api\search\route.tsx
-----------------------------------------
-// app/api/search/route.ts
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('query') || '';
-
-  try {
-    const client = await pool.connect();
-    const searchQuery = `
-      SELECT 
-        c.cik,
-        c.name,
-        ARRAY_AGG(t.ticker) as tickers,
-        ts_rank(to_tsvector('english', c.name), plainto_tsquery('english', $1)) as rank
-      FROM companies c
-      LEFT JOIN tickers t ON c.cik = t.cik
-      WHERE 
-        to_tsvector('english', c.name) @@ plainto_tsquery('english', $1) OR
-        t.ticker = $1 OR
-        c.cik = $1
-      GROUP BY c.cik, c.name
-      ORDER BY rank DESC
-      LIMIT 10;
-    `;
-
-    const result = await client.query(searchQuery, [query]);
-    client.release();
-
-    return NextResponse.json(result.rows.map(row => ({
-      ...row,
-      searchTerm: row.tickers.includes(query.toUpperCase()) ? query.toUpperCase() : row.cik === query ? query : row.name
-    })));
-  } catch  {
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-----------------------------------------
-
-File: app\api\session-file\route.tsx
-----------------------------------------
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import mime from 'mime'; // install via `npm install mime` if you want to do more robust MIME detection
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get('sessionId');
-    const filePath = searchParams.get('filePath');
-
-    if (!sessionId || !filePath) {
-      return NextResponse.json(
-        { error: 'Missing sessionId or filePath' },
-        { status: 400 }
-      );
-    }
-
-    // Construct the absolute path on disk
-    const absolutePath = path.join(
-      process.cwd(),
-      'data',
-      sessionId,
-      decodeURIComponent(filePath) // Add URI decoding
-    );
-
-    console.log('Serving file:', absolutePath);
-
-    if (!fs.existsSync(absolutePath)) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    // Read file from disk
-    const fileBuffer = fs.readFileSync(absolutePath);
-
-    // Infer MIME type from the filename extension, or fall back to octet-stream
-    const mimeType = mime.getType(absolutePath) || 'application/octet-stream';
-
-    const headers = {
-      'Content-Type': mimeType,
-      'Content-Disposition': `inline; filename="${path.basename(absolutePath)}"`,
-    };
-    // Add proper PDF content disposition
-    if (mimeType === 'application/pdf') {
-      headers['Content-Disposition'] = `inline; filename="${path.basename(absolutePath)}"`;
-    } else {
-      headers['Content-Disposition'] = `attachment; filename="${path.basename(absolutePath)}"`;
-    }
-
-    // Return the file bytes in the response
-    return new NextResponse(fileBuffer, {
-      headers: headers,
-    });
-  } catch (error) {
-    console.error('Error serving file:', error);
-    return NextResponse.json({ error: 'File serving error' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\sessions\route.tsx
-----------------------------------------
-// app/api/sessions/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
-// app/api/sessions/route.tsx
-export async function GET(request: Request) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  
-
-    const result = await client.query(`
-      SELECT 
-        s.session_id,
-        s.session_name,
-        s.created_at,
-        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
-      FROM sessions s
-      WHERE s.user_id = $1
-      ORDER BY s.created_at DESC
-    `, [userId]);
-
-
-    
-    const sessions = result.rows.map((row) => ({
-      session_id: row.session_id,
-      session_name: row.session_name,
-      created_at: row.created_at,
-      file_count: row.file_count
-    }));
-
-    return NextResponse.json({ sessions });
-  } catch (error) {
-    console.error('Session load error:', error);
-    //alert(error);
-    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-
-
-export async function POST(request: Request) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { sessionName } = await request.json();
-
-
-    //columns  session_id | user_id | session_name | created_at | expires_at
-    const result = await client.query(`
-      INSERT INTO sessions (user_id, session_name)
-      VALUES ($1, $2)
-      RETURNING session_id, created_at
-    `, [userId, sessionName]);
-
-   
-    const sessionId = result.rows[0].session_id;
-
-    await client.query('COMMIT');
-    return NextResponse.json({
-      success: true,
-      session_id: sessionId,
-      created_at: result.rows[0].created_at
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Session save error:', error);
-    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-----------------------------------------
-
-File: app\api\sessions\[sessionId]\route.tsx
-----------------------------------------
-// app/api/sessions/[sessionId]/route.tsx
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import fs from 'fs';
-import path from 'path';
-
-export async function GET(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-
-    const res = await client.query(
-      `SELECT session_id, session_name, created_at
-         FROM sessions
-        WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (res.rowCount === 0) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    const session = res.rows[0];
-    return NextResponse.json({ session });
-  } catch (error) {
-    console.error('Error fetching session:', error);
-    return NextResponse.json({ error: 'Error fetching session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { sessionId: string } }
-) {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  try {
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const sId = parseInt(params.sessionId, 10);
-    if (isNaN(sId)) {
-      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
-    }
-    // Optionally, remove the session reference from files (set session_id to NULL)
-    await client.query(
-      `UPDATE files SET session_id = NULL WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    const deleteResult = await client.query(
-      `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
-      [sId, userId]
-    );
-    if (deleteResult.rowCount === 0) {
-      // Nothing to delete or unauthorized
-      await client.query('ROLLBACK');
-      return NextResponse.json(
-        { error: 'Session not found or not authorized' },
-        { status: 404 }
-      );
-    }
-
-    await client.query('COMMIT');
-
-     // 3) Remove the session folder from disk (best-effort)
-    // data/<sessionId> is the folder holding heavyData.json + /files
-    const sessionPath = path.join(process.cwd(), 'data', String(sId));
-    try {
-      // Node 14 and below do not support fs.rmSync, so if you need older Node, use rmdirSync.
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      console.log(`Deleted directory: ${sessionPath}`);
-    } catch (err) {
-      // Not critical if folder removal fails – but we log it.
-      console.error(`Failed to remove folder ${sessionPath}:`, err);
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error deleting session:', error);
-    return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
-  } finally {
-    client.release();
-  }
-}
-
-----------------------------------------
-
-File: app\api\store-heavy-data\route.tsx
-----------------------------------------
-// app/api/store-heavy-data/route.ts
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { FileNode } from '@/components/FileTree';
-
-export async function POST(request: Request) {
-  try {
-    const { sessionId, heavyData } = await request.json();
-    if (!sessionId) {
-      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-    }
-
-    // 1) Create the directory structure: data/sessionId/files
-    const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const filesDir = path.join(dataDir, 'files');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    if (!fs.existsSync(filesDir)) {
-      fs.mkdirSync(filesDir);
-    }
-
-    // 2) For each file node in fileTree, decode base64 -> raw file
-    function storeFilesRecursively(nodes: FileNode[]): FileNode[] {
-      return nodes.map((node, idx) => {
-        if (node.type === 'folder' && node.children) {
-          return { ...node, children: storeFilesRecursively(node.children) };
-        }
-        if (node.type === 'file' && node.base64Data) {
-          // decode base64
-          const buffer = Buffer.from(node.base64Data, 'base64');
-          // create a unique filename. You can also keep the original name if you prefer
-          // but we add idx or a timestamp to avoid collisions:
-          const safeName = node.name.replace(/[^\w\d.]+/g, '_');
-          const fileName = `file_${Date.now()}_${idx}_${safeName}`;
-          const filePath = path.join(filesDir, fileName);
-
-          // 3) Write the file to data/sessionId/files/
-          fs.writeFileSync(filePath, buffer);
-
-          // 4) Remove base64Data from the node, and add localPath
-          return {
-            ...node,
-            base64Data: undefined,
-            rawData: undefined,
-            localPath: `files/${fileName}`
-          };
-        }
-        return node;
-      });
-    }
-
-    // If there's a fileTree, store each file on disk
-    let updatedFileTree: FileNode[] = [];
-    if (heavyData.fileTree) {
-      updatedFileTree = storeFilesRecursively(heavyData.fileTree);
-    }
-
-    // 5) Overwrite heavyData.fileTree with the updated one
-    const filePath = path.join(dataDir, 'heavyData.json');
-    const existingData = fs.existsSync(filePath) 
-                ? JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-                : {};
-
-    const finalHeavyData = {
-      ...existingData,
-      ...heavyData,
-      consolidatedCompanies: heavyData.consolidatedCompanies || [],
-    };
-    fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
-    return NextResponse.json({ success: true, filePath });
-  } catch (error) {
-
-    return NextResponse.json(
-      { error: 'Failed to save heavy data' + error },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const sessionId = searchParams.get('sessionId');
-
-  if (!sessionId) {
-    return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
-  }
-
-  try {
-    const dataDir = path.join(process.cwd(), 'data', sessionId);
-    const filePath = path.join(dataDir, 'heavyData.json');
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ error: 'No heavyData found' }, { status: 404 });
-    }
-
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
-  } catch (error) {
-    console.error('Error reading heavy data:', error);
-    return NextResponse.json({ error: 'Heavy data not found' }, { status: 404 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\submission-history\route.tsx
-----------------------------------------
-// app/api/submission-history/route.ts
-
-import { NextResponse } from "next/server"
-
-const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
-const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const cik = searchParams.get("cik") ?? ""
-
-    const remoteUrl = `${BASE_URL}/submission_history?cik=${cik}&api_token=${API_TOKEN}`
-    const response = await fetch(remoteUrl, { method: "GET" })
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Upstream error: ${response.statusText}` },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (err) {
-    console.error("Error in /api/submission-history route:", err)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
-}
-
-----------------------------------------
-
-File: app\api\test\route.tsx
-----------------------------------------
-// app/api/test/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-
-export async function GET() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT * FROM files ORDER BY file_id;');
-    client.release();
-
-    return NextResponse.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching data', error);
-    return NextResponse.json({ error: 'Error fetching data' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\api\uploads\route.tsx
-----------------------------------------
-// app/api/uploads/route.ts
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-export async function GET(request: Request) {
-  const userId = request.headers.get('x-user-id');
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  try {
-    const client = await pool.connect();
-    // 1) Fetch all uploads for this user:
-    const uploadsResult = await client.query(`
-      SELECT upload_id, upload_name, created_at
-      FROM uploads
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-    `, [userId]);
-
-    const uploads = uploadsResult.rows;
-    client.release();
-    return NextResponse.json({ uploads });
-  } catch (error) {
-    console.error('Error fetching uploads:', error);
-    return NextResponse.json({ error: 'Error fetching uploads' }, { status: 500 });
-  }
-}
-
-export async function POST(request: Request) {
-  let client;
-  try {
-    client = await pool.connect();
-    const body = await request.json();
-    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
-
-    // 1) Validate user ID from headers
-    const userId = request.headers.get('x-user-id');
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // 2) Validate required fields
-    if (!uploadName) {
-      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
-    }
-
-    // 3) Create a new "upload" row
-    const insertUploadRes = await client.query(
-      `INSERT INTO uploads (user_id, upload_name)
-       VALUES ($1, $2)
-       RETURNING upload_id`,
-      [userId, uploadName]
-    );
-    const newUploadId = insertUploadRes.rows[0].upload_id;
-
-    // 4) Gather all files from the fileTree
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // base64 string from the frontend
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) {
-          traverseTree(node.children);
-        }
-      }
-    }
-    traverseTree(fileTree || []);
-
-    // 5) Insert each file row + extraction if applicable
-    for (const file of filesToInsert) {
-      const fileDataBuffer = file.fileDataBase64
-        ? Buffer.from(file.fileDataBase64, 'base64')
-        : null;
-
-      // Insert a row in "files"
-      const insertFileRes = await client.query(
-        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING file_id`,
-        [
-          newUploadId,
-          file.fileName,
-          file.fullPath,
-          file.mimeType,
-          fileDataBuffer,
-          false
-        ]
-      );
-
-      const fileId = insertFileRes.rows[0].file_id;
-
-      // If there's text or summary, insert into "extractions"
-      const extractedText = extractedTexts?.[file.fullPath];
-      const summary = summaries?.[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(
-          `UPDATE files SET is_extracted = TRUE WHERE file_id = $1`,
-          [fileId]
-        );
-
-        // Insert into "extractions"
-        await client.query(
-          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-           VALUES ($1, $2, $3)`,
-          [fileId, extractedText || null, summary || null]
-        );
-      }
-    }
-
-    client.release();
-
-    // Return the upload_id and chatHistory (if any)
-    return NextResponse.json(
-      { upload_id: newUploadId, chatHistory },
-      { status: 200 }
-    );
-  } catch (error) {
-    console.error('Error creating new upload:', error);
-    if (client) client.release();
-    return NextResponse.json(
-      { error: 'Error creating new upload' },
-      { status: 500 }
-    );
-  }
-}
-
-----------------------------------------
-
-File: app\api\uploads\[uploadId]\route.tsx
-----------------------------------------
-
-import { NextResponse } from 'next/server';
-import pool from '@/utils/db';
-import { FileNode } from '@/components/FileTree';
-
-
-export async function DELETE(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId,10);
-    if(isNaN(uploadId)) {
-      return NextResponse.json({ error:'Invalid upload ID'},{ status:400 });
-    }
-    //1) Find all files for this upload
-    const fileRes = await client.query(
-      'SELECT file_id FROM files WHERE upload_id=$1',[uploadId]
-    );
-    const fileIds = fileRes.rows.map(r=>r.file_id);
-    //2) Delete extractions for these files
-    if(fileIds.length>0) {
-      await client.query(
-        'DELETE FROM extractions WHERE file_id=ANY($1)',
-        [fileIds]
-      );
-    }
-    //3) Delete files themselves
-    await client.query('DELETE FROM files WHERE upload_id=$1',[uploadId]);
-    //4) Finally delete the upload
-    await client.query('DELETE FROM uploads WHERE upload_id=$1',[uploadId]);
-    client.release();
-    return NextResponse.json({ success:true },{ status:200 });
-  } catch(error) {
-    console.error('Error deleting entire upload:',error);
-    if(client) client.release();
-    return NextResponse.json({ error:'Error deleting upload'},{ status:500 });
-  }
-}
-
-
-export async function PATCH(request: Request,{ params }: { params: { uploadId: string } }) {
-  let client;
-  try {
-    client = await pool.connect();
-    const uploadId = parseInt(params.uploadId, 10);
-    if (isNaN(uploadId)) {
-      return NextResponse.json({ error: 'Invalid upload ID' }, { status: 400 });
-    }
-
-    const body = await request.json();
-    const { fileTree, extractedTexts, summaries } = body;
-    const filesToInsert: Array<{
-      fullPath: string;
-      fileName: string;
-      fileDataBase64?: string;
-      mimeType: string;
-    }> = [];
-
-    function traverseTree(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.type === 'file') {
-          filesToInsert.push({
-            fullPath: node.fullPath || '',
-            fileName: node.name,
-            fileDataBase64: node.base64Data, // from front end
-            mimeType: node.mimeType || 'application/octet-stream'
-          });
-        }
-        if (node.children?.length) traverseTree(node.children);
-      }
-    }
-    traverseTree(fileTree);
-
-    // For each file, either insert or update
-    for (const file of filesToInsert) {
-      const existingFileRes = await client.query(
-        `SELECT file_id FROM files WHERE upload_id = $1 AND file_path = $2`,
-        [uploadId, file.fullPath]
-      );
-      let fileId: number;
-      if (existingFileRes.rowCount && existingFileRes.rowCount > 0) {
-        fileId = existingFileRes.rows[0].file_id;
-        // Potentially update file_data if new base64 data is provided
-        if (file.fileDataBase64) {
-          const fileDataBuffer = Buffer.from(file.fileDataBase64, 'base64');
-          await client.query(
-            `UPDATE files
-                SET file_data = $2, mime_type=$3
-              WHERE file_id = $1`,
-            [fileId, fileDataBuffer, file.mimeType]
-          );
-        }
-      } else {
-        // Insert new file row
-        const fileDataBuffer = file.fileDataBase64
-          ? Buffer.from(file.fileDataBase64, 'base64')
-          : null;
-        const insertRes = await client.query(
-          `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING file_id`,
-          [
-            uploadId,
-            file.fileName,
-            file.fullPath,
-            file.mimeType,
-            fileDataBuffer,
-            false
-          ]
-        );
-        fileId = insertRes.rows[0].file_id;
-      }
-
-      // Check if we have extraction for that path
-      const extractedText = extractedTexts[file.fullPath];
-      const summary = summaries[file.fullPath];
-      if (extractedText || summary) {
-        // Mark file as extracted
-        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id = $1`, [fileId]);
-        // Upsert extraction
-        const existingExtractRes = await client.query(
-          `SELECT extraction_id FROM extractions WHERE file_id=$1`,
-          [fileId]
-        );
-        if (existingExtractRes.rowCount && existingExtractRes.rowCount > 0) {
-          await client.query(
-            `UPDATE extractions
-                SET extracted_text=$2,
-                    summarized_text=$3,
-                    updated_at=NOW()
-              WHERE file_id=$1`,
-            [fileId, extractedText || null, summary || null]
-          );
-        } else {
-          await client.query(
-            `INSERT INTO extractions (file_id, extracted_text, summarized_text)
-             VALUES ($1,$2,$3)`,
-            [fileId, extractedText || null, summary || null]
-          );
-        }
-      }
-    }
-
-    client.release();
-    return NextResponse.json({ success: true, message: 'Upload updated.' });
-  } catch (error) {
-    console.error('Error updating upload:', error);
-    if (client) client.release();
-    return NextResponse.json({ error: 'Error updating upload' }, { status: 500 });
-  }
-}
-
-----------------------------------------
-
-File: app\companies\page.tsx
-----------------------------------------
-// app/companies/page.tsx
 'use client';
-
-import React, { useEffect, useState } from 'react';  // <-- ensure React is imported
-import { useSearchParams } from 'next/navigation';
-import Navbar from '@/components/Navbar';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
+import Navbar from '@/components/Navbar';
+import { 
+  defaultSummarizationTemplate,
+  defaultExtractionTemplate,
+  defaultConsolidationTemplate,
+  defaultVariableExtraction
+} from '@/lib/prompts';
 
-interface VariableData {
-  value?: number | string;
-  currency?: string;
-  unit?: string;
-  sources: Array<{
-    filePath: string;
-    pageNumber?: number;
-    confidence?: number;
-  }>;
-  [year: number]: {
-    value?: number | string;
-    currency?: string;
-    unit?: string;
-    sources: Array<{
-      filePath: string;
-      pageNumber?: number;
-      confidence?: number;
-    }>;
-  };
-}
-
-interface ConsolidatedCompany {
-  name: string;
-  type: 'company' | 'fund';
-  description: string;
-  variables: Record<string, VariableData>;
-  dates: string[];
-  parent?: string;
-  children?: ConsolidatedCompany[];
-  ownershipPath: string[];
-  sources: Array<{
-    filePath: string;
-    pageNumber?: number;
-    confidence?: number;
-  }>;
-  // The following are optional properties that might be present for "fund" types or other data structures:
-  investments?: Array<{
-    company: string;
-    ownershipPercentage?: number;
-  }>;
-  subsidiaries?: string[];
-}
-
-export default function CompaniesPage() {
+export default function SettingsPage() {
+  const [user, setUser] = useState<any>(null);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [message, setMessage] = useState('');
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const existingSessionId = searchParams.get('sessionId');
-  
-  const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
-  const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
 
-  // New state for raw JSON toggling
-  const [shownJson, setShownJson] = useState<Set<string>>(new Set());
+
+const [summarizationTemplate, setSummarizationTemplate] = useState(defaultSummarizationTemplate);
+const [extractionTemplate, setExtractionTemplate] = useState(defaultExtractionTemplate);
+const [consolidationTemplate, setConsolidationTemplate] = useState(defaultConsolidationTemplate);
+const [variableExtraction, setVariableExtraction] = useState(defaultVariableExtraction);
+
 
   useEffect(() => {
-    const userId = localStorage.getItem('userId');
-    if (!userId) return; // Not logged in
-    fetch('/api/sessions', {
-      headers: { 'x-user-id': userId }
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (data.sessions) {
-          setSessions(data.sessions);
-        }
-      })
-      .catch(err => {
-        console.error('Error fetching sessions for Companies page:', err);
-      });
-  }, []);
-
-  useEffect(() => {
-    const fetchConsolidatedData = async () => {
-      if (!existingSessionId) {
-        setLoading(false);
+    const fetchUser = async () => {
+      const userId = localStorage.getItem('userId');
+      const email = localStorage.getItem('userEmail');
+      if (!userId || !email) {
+        router.push('/login');
         return;
       }
-      try {
-        const response = await fetch(`/api/store-heavy-data?sessionId=${existingSessionId}`);
-        if (!response.ok) throw new Error('Failed to fetch data');
-        const data = await response.json();
+      setUser({ id: userId, email });
 
-        if (data.consolidatedCompanies) {
-          setCompanies(data.consolidatedCompanies);
-        } else {
-          setCompanies([]);
+      // Load saved templates
+      const savedSummarization = localStorage.getItem('summarizationTemplate');
+      const savedExtraction = localStorage.getItem('extractionTemplate');
+      const savedConsolidation = localStorage.getItem('consolidationTemplate');
+      const savedVariableExtraction = localStorage.getItem('variableExtraction');
+            
+      if (savedSummarization) setSummarizationTemplate(savedSummarization);
+      if (savedExtraction) setExtractionTemplate(savedExtraction);
+      if (savedConsolidation) setConsolidationTemplate(savedConsolidation);
+      if (savedVariableExtraction) setVariableExtraction(savedVariableExtraction);
+      
+      // Fetch API keys from your local endpoint
+      try {
+        const res = await fetch(`/api/api-keys?userId=${userId}`);
+        const text = await res.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (error) {
+          console.error("Error parsing API keys JSON: ", error);
         }
-      } catch (error) {
-        console.error('Error loading companies:', error);
-      } finally {
-        setLoading(false);
+        if ((data as any).apiKeys) {
+          setApiKeys(
+            Object.fromEntries(
+              (data as any).apiKeys.map((k: { provider: string; decrypted_key: string }) => [
+                k.provider,
+                k.decrypted_key
+              ])
+            )
+          );
+        }
+      } catch (err) {
+        console.error('Error fetching API keys:', err);
       }
     };
+    fetchUser();
+  }, [router]);
 
-    fetchConsolidatedData();
-  }, [existingSessionId]);
-
-  // Add conditional rendering for the "no company data retrieved" message
-  if (searchParams.get('message') === 'noData') {
-    return (
-      <div className="min-h-screen bg-gray-50 text-gray-600">
-        <main className="max-w-7xl mx-auto px-4 py-8">
-          <p className="text-center text-gray-600">No company data retrieved.</p>
-        </main>
-      </div>
-    );
-  }
-
-  const getCompanyYears = (company: ConsolidatedCompany): number[] => {
-    const years = new Set<number>();
-    Object.values(company.variables).forEach(variable => {
-      Object.keys(variable).forEach(yearStr => {
-        const year = parseInt(yearStr, 10);
-        if (!isNaN(year)) years.add(year);
-      });
-    });
-    return Array.from(years).sort((a, b) => b - a);
+  const saveTemplates = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      localStorage.setItem('summarizationTemplate', summarizationTemplate);
+      localStorage.setItem('extractionTemplate', extractionTemplate);
+      localStorage.setItem('consolidationTemplate', consolidationTemplate);
+      localStorage.setItem('variableExtraction', variableExtraction);
+      setMessage('Templates saved successfully');
+    } catch (err) {
+      setMessage('Error saving templates');
+      console.error(err);
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 py-8">
-          <p>Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  const updateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          company: user.company // if you store company info
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Error updating profile');
+      setMessage('Profile updated successfully');
+    } catch (err) {
+      setMessage('Error updating profile');
+      console.error(err);
+    }
+  };
 
-  const renderCompanySection = (type: 'company' | 'fund', color: string) => {
-    const filteredCompanies = companies.filter(c => c.type === type);
-    if (filteredCompanies.length === 0) return null;
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/user/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Error changing password');
+      setMessage('Password changed successfully');
+    } catch (err) {
+      setMessage('Error changing password');
+      console.error(err);
+    }
+  };
 
-    return (
-      <div className="mb-8 text-gray-500">
-        <h2 className="text-xl font-bold mb-4" style={{ color }}>
-          {type === 'fund' ? 'Funds' : 'Companies'}
-        </h2>
-        {filteredCompanies.map(company => {
-          const companyYears = getCompanyYears(company);
-          const latestYear = companyYears[0] || null;
-          const selectedYear = selectedYears[company.name] ?? latestYear;
+  const saveApiKeys = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const updates = Object.entries(apiKeys).map(([provider, key]) => ({
+        user_id: user.id,
+        provider,
+        decrypted_key: key,
+        updated_at: new Date().toISOString()
+      }));
 
-          return (
-            <div 
-              key={company.name}
-              className="bg-white p-6 rounded-lg shadow-sm mb-4 border-l-4"
-              style={{ borderColor: color }}
-            >
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold">{company.name}</h2>
-                <div className="flex items-center gap-3">
-                  {companyYears.length > 0 && (
-                    <select
-                      value={selectedYear || ''}
-                      onChange={(e) => {
-                        const year = parseInt(e.target.value, 10);
-                        setSelectedYears(prev => ({
-                          ...prev,
-                          [company.name]: year
-                        }));
-                      }}
-                      className="px-4 py-2 border rounded"
-                    >
-                      {companyYears.map(year => (
-                        <option key={year} value={year}>{year}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button
-                    onClick={() => {
-                      const newSet = new Set(expandedOwnership);
-                      newSet.has(company.name) 
-                        ? newSet.delete(company.name) 
-                        : newSet.add(company.name);
-                      setExpandedOwnership(newSet);
-                    }}
-                    className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm"
-                  >
-                    {expandedOwnership.has(company.name) 
-                      ? 'Hide Ownership' 
-                      : 'Show Ownership'}
-                  </button>
-                </div>
-              </div>
-              
-              {company.description && (
-                <p className="text-gray-600 mb-4">{company.description}</p>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Updated Variable Display Logic */}
-                {Object.entries(company.variables).map(([varName, variableData]) => {
-                  let varData: any = null;
-                  
-                  // Check for year-specific data
-                  if (selectedYear !== null) {
-                    varData = variableData[selectedYear];
-                  } 
-                  // Fallback to general value if no year is selected
-                  else if (variableData.value !== undefined) {
-                    varData = variableData;
-                  }
-
-                  return varData ? (
-                    <div key={varName} className="p-4 rounded" style={{ backgroundColor: `${color}10` }}>
-                      <div className="flex justify-between items-center">
-                        <span className="font-medium capitalize">
-                          {varName.replace(/_/g, ' ')}
-                        </span>
-                        <span className="text-sm text-gray-600">
-                          {varData.currency} {varData.value?.toLocaleString()}
-                          {varData.unit}
-                        </span>
-                      </div>
-                      <div className="mt-2 text-xs text-gray-500">
-                        Sources:
-                        {varData.sources?.map((source: any, idx: number) => (
-                          <div key={idx} className="mt-1">
-                            • {source.filePath.split('/').pop()} 
-                            {source.pageNumber && ` (Page ${source.pageNumber})`}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null;
-                })}
-                
-                {/* Conditionally Rendered Ownership Structure */}
-                {expandedOwnership.has(company.name) && (
-                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                    <h3 className="text-lg font-semibold mb-2">Ownership Structure</h3>
-                    <OwnershipTree company={company} />
-                  </div>
-                )}
-              </div>
-
-              {/* Show/Hide Raw Data Button & JSON Preview */}
-              <div className="mt-4">
-                <button
-                  onClick={() => {
-                    const newSet = new Set(shownJson);
-                    newSet.has(company.name) 
-                      ? newSet.delete(company.name) 
-                      : newSet.add(company.name);
-                    setShownJson(newSet);
-                  }}
-                  className="text-sm text-blue-600 hover:text-blue-800"
-                >
-                  {shownJson.has(company.name) ? 'Hide Raw Data' : 'Show Raw Data'}
-                </button>
-                
-                {shownJson.has(company.name) && (
-                  <div className="mt-2 p-3 bg-gray-50 rounded">
-                    <pre className="text-xs overflow-auto max-h-96">
-                      {JSON.stringify(company, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
+      const res = await fetch('/api/api-keys', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Error saving API keys');
+      setMessage('API keys updated successfully');
+    } catch (err) {
+      setMessage('Error saving API keys');
+      console.error(err);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-4 py-8">
+     <Navbar />
+      <main className="max-w-2xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800">Settings</h1>
 
-        {/* Session Selector */}
-        <div className="mb-4 text-gray-500">
-          <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
-          <select
-            className="border p-2 rounded"
-            value={existingSessionId || ''}
-            onChange={(e) => {
-              const newSessionId = e.target.value;
-              router.push(`/companies?sessionId=${newSessionId}`);
-            }}
-          >
-            <option value="">-- Choose a session --</option>
-            {sessions.map((s) => (
-              <option key={s.session_id} value={s.session_id}>
-                {s.session_name} (ID: {s.session_id})
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Profile Section */}
+        <form onSubmit={updateProfile} className="bg-white p-6 rounded-lg shadow mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">Profile</h2>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-1">Email</label>
+            <input
+              type="email"
+              value={user?.email || ''}
+              className="w-full p-2 border rounded text-gray-700"
+              disabled
+            />
+          </div>
+          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+            Update Profile
+          </button>
+        </form>
 
-        {renderCompanySection('fund', '#2563eb')}
-        {renderCompanySection('company', '#16a34a')}
+        {/* Password Change */}
+        <form onSubmit={changePassword} className="bg-white p-6 rounded-lg shadow mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">Change Password</h2>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-1">Current Password</label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full p-2 border rounded text-gray-700"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-1">New Password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-2 border rounded text-gray-700"
+            />
+          </div>
+          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+            Change Password
+          </button>
+        </form>
+
+        {/* API Keys */}
+        <form onSubmit={saveApiKeys} className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">API Keys</h2>
+          {['openai', 'anthropic', 'cohere'].map((provider) => (
+            <div key={provider} className="mb-4">
+              <label className="block text-sm font-medium text-gray-600 mb-1 capitalize">
+                {provider} API Key
+              </label>
+              <input
+                type="password"
+                value={apiKeys[provider] || ''}
+                onChange={(e) =>
+                  setApiKeys({ ...apiKeys, [provider]: e.target.value })
+                }
+                className="w-full p-2 border rounded text-gray-700"
+              />
+            </div>
+          ))}
+          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+            Save API Keys
+          </button>
+        </form>
+
+          {/* LLM Prompt Templates Section */}
+        <form onSubmit={saveTemplates} className="bg-white p-6 rounded-lg shadow mt-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">LLM Prompt Templates</h2>
+          <p className="mb-2 text-gray-600">Customize the prompt templates used at each step.</p>
+          
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Summarization Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={6}
+            value={summarizationTemplate}
+            onChange={(e) => setSummarizationTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Extraction Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={8}
+            value={extractionTemplate}
+            onChange={(e) => setExtractionTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Consolidation Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={10}
+            value={consolidationTemplate}
+            onChange={(e) => setConsolidationTemplate(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-600 mt-4">
+            Variable Extraction Template
+          </label>
+          <textarea
+            className="w-full p-2 border rounded text-gray-700"
+            rows={6}
+            value={variableExtraction}
+            onChange={(e) => setVariableExtraction(e.target.value)}
+          />
+
+          <button type="submit" className="mt-4 bg-blue-600 text-white px-4 py-2 rounded">
+            Save Templates
+          </button>
+        </form>
+
+        {message && (
+          <div className="mt-4 p-3 bg-blue-100 text-blue-800 rounded text-gray-700">
+            {message}
+          </div>
+        )}
       </main>
     </div>
   );
 }
 
-// OwnershipTree component with investments and subsidiaries display
-const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
-  <div className="ml-4 border-l-2 border-gray-200 pl-4">
-    {/* Existing ownership path */}
-    {company.ownershipPath?.map((owner, idx) => (
-      <div key={idx} className="text-sm text-gray-600">
-        {idx === 0 ? 'Root Owner:' : '→'} {owner}
-      </div>
-    ))}
+----------------------------------------
+
+File: app/signup/page.tsx
+----------------------------------------
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import Navbar from '@/components/Navbar';
+
+export default function SignupPage() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [company, setCompany] = useState('');
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState('');
+  const router = useRouter();
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage('');
     
-    {/* Display investments for funds */}
-    {company.type === 'fund' && (company.investments ?? []).length > 0 && (
-      <div className="mt-2">
-        <h4 className="font-semibold text-sm mb-1">Investments:</h4>
-        {(company.investments ?? []).map((investment, idx) => (
-          <div key={idx} className="flex items-center gap-2 text-sm">
-            <span>{investment.company}</span>
-            {investment.ownershipPercentage && (
-              <span className="text-gray-500">
-                ({investment.ownershipPercentage}%)
-              </span>
-            )}
+    if (!email || !password || !company || !reason) {
+      setError('Please fill out all fields');
+      return;
+    }
+  
+    try {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          password,
+          company,
+          reason
+        }),
+      });
+  
+      const data = await response.json();
+  
+      if (!response.ok) {
+        throw new Error(data.error || 'Signup failed');
+      }
+  
+      setSuccessMessage('Sign-up successful! Redirecting to login...');
+      setTimeout(() => {
+        router.push('/login');
+      }, 3000);
+    } catch (err) {
+      console.error('Signup Error:', err);
+      setError(err instanceof Error ? err.message : 'Error creating account. Please try again.');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <main className="flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
+          <h1 className="text-2xl font-bold text-center text-blue-600 mb-6">
+            Create Your Account
+          </h1>
+          {successMessage && (
+            <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
+              {successMessage}
+            </div>
+          )}
+          {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
+          <form onSubmit={handleSignup} className="space-y-4">
+            <div>
+              <label className="block text-gray-700 text-sm font-medium mb-1">
+                Email
+              </label>
+              <input
+                type="email"
+                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                placeholder="Enter your email"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 text-sm font-medium mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="Create a password"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 text-sm font-medium mb-1">
+                Company
+              </label>
+              <input
+                type="text"
+                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                required
+                placeholder="Where do you work?"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 text-sm font-medium mb-1">
+                Reason for using the tool
+              </label>
+              <textarea
+                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                required
+                placeholder="Briefly tell us why you want to use the tool"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors"
+            >
+              Sign Up
+            </button>
+          </form>
+          <div className="mt-4 text-center text-sm text-gray-600">
+            Already have an account?{' '}
+            <Link href="/login" className="text-blue-600 hover:underline">
+              Log In
+            </Link>
           </div>
-        ))}
-      </div>
-    )}
-
-    {/* Display subsidiaries */}
-    {(company.subsidiaries ?? []).length > 0 && (
-      <div className="mt-2">
-        <h4 className="font-semibold text-sm mb-1">Subsidiaries:</h4>
-        {(company.subsidiaries ?? []).map((sub, idx) => (
-          <div key={idx} className="text-sm">{sub}</div>
-        ))}
-      </div>
-    )}
-
-    {/* Recursive children */}
-    {company.children?.map(child => (
-      <div key={child.name} className="mt-2">
-        <div className="font-medium">{child.name}</div>
-        <OwnershipTree company={child} />
-      </div>
-    ))}
-  </div>
-);
+        </div>
+      </main>
+    </div>
+  );
+}
 
 ----------------------------------------
 
-File: app\dashboard\page.tsx
+File: app/dashboard/useChat.tsx
+----------------------------------------
+'use client';
+import { useState } from 'react';
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+export type ContextType = 'none' | 'local' | 'global';
+
+export function useChat() {
+  const [contextType, setContextType] = useState<ContextType>('none');
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+
+  // Submit chat to your LLM
+  const handleChatSubmit = async ({
+    e,
+    selectedFileText,
+    globalContext,
+    model
+  }: {
+    e: React.FormEvent<HTMLFormElement>;
+    selectedFileText: string;
+    globalContext: string;
+    model: string;
+  }) => {
+    e.preventDefault();
+    if (!chatMessage.trim()) return;
+  
+    setIsChatLoading(true);
+    const newHistory = [...chatHistory, { role: 'user', content: chatMessage }];
+
+    try {
+      let context = '';
+      if (contextType === 'local' && selectedFileText) {
+        context = selectedFileText;
+      } else if (contextType === 'global' && globalContext) {
+        // Example: limit the length if needed
+        context = globalContext.slice(0, 5000);
+      }
+
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json' ,
+          'x-user-id': localStorage.getItem('userId') || ''
+        },
+        body: JSON.stringify({ 
+          prompt: chatMessage,
+          context: context,
+          history: newHistory,
+          model: model,
+          format: contextType === 'global' ? 'json' : undefined
+         }),
+      });
+
+  
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Chat failed');
+  
+      setChatHistory([...newHistory, { role: 'assistant', content: data.content }]);
+      setChatMessage('');
+      
+    } catch (error) {
+      console.error('Chat Error:', error);
+      setChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: `Error: ${(error as Error).message} - Please try again`
+      }]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  return {
+    contextType,
+    setContextType,
+    chatMessage,
+    setChatMessage,
+    chatHistory,
+    setChatHistory,
+    isChatLoading,
+    handleChatSubmit,
+  };
+}
+
+----------------------------------------
+
+File: app/dashboard/page.tsx
 ----------------------------------------
 'use client';
 
@@ -3026,99 +1677,7 @@ export default function Dashboard() {
 
 ----------------------------------------
 
-File: app\dashboard\useChat.tsx
-----------------------------------------
-'use client';
-import { useState } from 'react';
-
-interface ChatMessage {
-  role: string;
-  content: string;
-}
-
-export type ContextType = 'none' | 'local' | 'global';
-
-export function useChat() {
-  const [contextType, setContextType] = useState<ContextType>('none');
-  const [chatMessage, setChatMessage] = useState('');
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [isChatLoading, setIsChatLoading] = useState(false);
-
-  // Submit chat to your LLM
-  const handleChatSubmit = async ({
-    e,
-    selectedFileText,
-    globalContext,
-    model
-  }: {
-    e: React.FormEvent<HTMLFormElement>;
-    selectedFileText: string;
-    globalContext: string;
-    model: string;
-  }) => {
-    e.preventDefault();
-    if (!chatMessage.trim()) return;
-  
-    setIsChatLoading(true);
-    const newHistory = [...chatHistory, { role: 'user', content: chatMessage }];
-
-    try {
-      let context = '';
-      if (contextType === 'local' && selectedFileText) {
-        context = selectedFileText;
-      } else if (contextType === 'global' && globalContext) {
-        // Example: limit the length if needed
-        context = globalContext.slice(0, 5000);
-      }
-
-      const res = await fetch('/api/llm', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json' ,
-          'x-user-id': localStorage.getItem('userId') || ''
-        },
-        body: JSON.stringify({ 
-          prompt: chatMessage,
-          context: context,
-          history: newHistory,
-          model: model,
-          format: contextType === 'global' ? 'json' : undefined
-         }),
-      });
-
-  
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Chat failed');
-  
-      setChatHistory([...newHistory, { role: 'assistant', content: data.content }]);
-      setChatMessage('');
-      
-    } catch (error) {
-      console.error('Chat Error:', error);
-      setChatHistory(prev => [...prev, {
-        role: 'assistant',
-        content: `Error: ${(error as Error).message} - Please try again`
-      }]);
-    } finally {
-      setIsChatLoading(false);
-    }
-  };
-
-  return {
-    contextType,
-    setContextType,
-    chatMessage,
-    setChatMessage,
-    chatHistory,
-    setChatHistory,
-    isChatLoading,
-    handleChatSubmit,
-  };
-}
-
-----------------------------------------
-
-File: app\dashboard\utils\utils.tsx
+File: app/dashboard/utils/utils.tsx
 ----------------------------------------
 // ==================================================================
 // 1) Imports
@@ -4579,306 +3138,7 @@ export const confirmLoadSession = async (
 
 ----------------------------------------
 
-File: app\data\page.tsx
-----------------------------------------
-"use client";
-
-import { useState } from "react";
-import { SearchForm } from "@/components/ui/search-form";
-import { SearchResults } from "@/components/ui/search-results";
-import { Skeleton } from "@/components/ui/skeleton";
-import Navbar from "@/components/Navbar";
-
-// If you have a Navbar component like in HistoryPage, import it:
-// import Navbar from "@/components/Navbar";
-
-export default function DataPage() {
-  const [results, setResults] = useState([]);
-  const [isSearching, setIsSearching] = useState(false);
-
-  async function handleSearch(params: { name: string; ticker: string; cik: string }) {
-    console.log("Searching with:", params); // <-- Debug log
-    setIsSearching(true);
-    try {
-      // Construct a query string with name, ticker, cik
-      const searchParams = new URLSearchParams({
-        name: params.name.trim(),
-        ticker: params.ticker.trim(),
-        cik: params.cik.trim(),
-      });
-
-      const response = await fetch(`/api/financial-data?${searchParams.toString()}`);
-      const data = await response.json();
-      console.log("Data received:", data); // <-- Debug log
-      setResults(data || []);
-    } catch (error) {
-      console.error("Error fetching financial data:", error);
-      setResults([]);
-    } finally {
-      setIsSearching(false);
-    }
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-     
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
-          SEC Financial Data Explorer
-        </h1>
-
-        {/* Our new SearchForm component */}
-        <SearchForm onSearch={handleSearch} />
-
-        {/* Results or loading skeletons */}
-        {isSearching ? (
-          <div className="mt-8 space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-6 w-full" />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-8">
-            <SearchResults results={results} />
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: app\data\[cik]\page.tsx
-----------------------------------------
-// app/data/[cik]/page.tsx
-export const dynamic = "force-dynamic";
-import { CompanyFactsPage } from "@/components/ui/company-facts-page";
-import Navbar from "@/components/Navbar";
-interface CompanyDataPageProps {
-  params: {
-    cik: string;
-  };
-}
-
-
-
-export default async function CompanyDataPage({ params }: CompanyDataPageProps) {
-  const { cik } = await params;
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
-          Company Financial Facts & Info
-        </h1>
-
-        {/* Our client component with all the logic */}
-        <CompanyFactsPage cik={cik} />
-      </main>
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: app\data-aggregated\page.tsx
-----------------------------------------
-// app/data-aggregated/page.tsx
-
-"use client";
-
-import React, { useEffect, useState } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
-
-type AccountKey = string; // e.g. "AccountsPayableCurrent", "Assets", etc.
-interface AccountDefinition {
-  description: string;
-  instant: number;       // 1 or 0
-  name: string;
-  taxonomy: string;      // e.g. "us-gaap"
-  units: string;         // e.g. "USD" or "shares"
-}
-
-// Suppose the aggregated data from your remote returns array of objects
-// e.g. { cik: '0000320193', year: 2022, value: 123456, ... }
-interface AggregatedDataItem {
-  cik: string;
-  year: number;
-  value: number;
-  [key: string]: string | number;
-}
-
-export default function DataAggregatedPage() {
-  // 1) States
-  const [accounts, setAccounts] = useState<Record<AccountKey, AccountDefinition>>({})
-  const [loadingAccounts, setLoadingAccounts] = useState(false)
-
-  const [selectedAccount, setSelectedAccount] = useState<string>("")
-  const [year, setYear] = useState<string>("2022")
-
-  const [loadingData, setLoadingData] = useState(false)
-  const [aggregatedData, setAggregatedData] = useState<AggregatedDataItem[]>([])
-
-  const [error, setError] = useState<string>("")
-
-  // 2) Fetch all accounts on mount
-  useEffect(() => {
-    async function fetchAccounts() {
-      setLoadingAccounts(true)
-      try {
-        const res = await fetch("/api/all-accounts")
-        if (!res.ok) {
-          const err = await res.json()
-          throw new Error(err.error || "Failed fetching accounts.")
-        }
-        const data = await res.json()
-        setAccounts(data)
-      } catch (err: unknown) {
-        if (err instanceof Error) {
-          setError(`Error: ${err.message}`)
-        } else {
-          setError("Unknown error fetching accounts.")
-        }
-      } finally {
-        setLoadingAccounts(false)
-      }
-    }
-    fetchAccounts()
-  }, [])
-
-  // 3) Function to load aggregated data for the chosen account
-  async function handleLoadData() {
-    if (!selectedAccount) {
-      alert("Please select an account first.")
-      return
-    }
-
-    setLoadingData(true)
-    setAggregatedData([])
-    setError("")
-
-    try {
-      // e.g. /api/account-data?account=AccountsPayableCurrent&year=2022
-      const query = new URLSearchParams({
-        account: selectedAccount,
-        year: year || "",
-      })
-      const res = await fetch(`/api/account-data?${query.toString()}`)
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "Failed fetching aggregated data.")
-      }
-      const data = await res.json()
-      // data is presumably an array of { cik, value, ... }
-      setAggregatedData(data)
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(`Error: ${err.message}`)
-      } else {
-        setError("Unknown error fetching aggregated data.")
-      }
-    } finally {
-      setLoadingData(false)
-    }
-  }
-
-  // 4) Render
-  const accountKeys = Object.keys(accounts)
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-        <h1 className="text-2xl font-bold text-center text-gray-800 mb-4">
-          Aggregated Data by Account
-        </h1>
-
-        {/* If error */}
-        {error && <p className="text-red-600">{error}</p>}
-
-        {/* Accounts dropdown */}
-        <div className="bg-white p-4 shadow rounded space-y-4 text-gray-600">
-          <label className="block font-semibold">Select an Account:</label>
-          {loadingAccounts ? (
-            <Skeleton className="h-6 w-full text-gray-600" />
-          ) : (
-            <select
-              className="border rounded px-2 py-1 w-full text-sm"
-              value={selectedAccount}
-              onChange={(e) => setSelectedAccount(e.target.value)}
-            >
-              <option value="">-- Choose an account --</option>
-              {accountKeys.map((key) => (
-                <option key={key} value={key}>
-                  {key} ({accounts[key].units})
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Optional year input */}
-          <label className="block font-semibold">Year:</label>
-          <input
-            type="text"
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            placeholder="e.g. 2022"
-            className="border rounded px-2 py-1 w-full text-sm"
-          />
-
-          {/* Button to load data */}
-          <div className="text-right">
-            <button
-              onClick={handleLoadData}
-              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            >
-              Load Aggregated Data
-            </button>
-          </div>
-        </div>
-
-        {/* Aggregated data results */}
-        <div className="bg-white p-4 shadow rounded">
-          {loadingData && <Skeleton className="h-4 w-full" />}
-          {!loadingData && aggregatedData.length > 0 && (
-            <div>
-              <h2 className="font-semibold mb-2 text-lg">
-                Results for {selectedAccount} ({year || "All Years"})
-              </h2>
-              <table className="w-full border text-sm">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="border p-2 text-left">CIK</th>
-                    <th className="border p-2 text-left">Year</th>
-                    <th className="border p-2 text-left">Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {aggregatedData.map((item, idx) => (
-                    <tr key={idx}>
-                      <td className="border p-2">{item.cik}</td>
-                      <td className="border p-2">{item.year}</td>
-                      <td className="border p-2">{item.value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {!loadingData && aggregatedData.length === 0 && (
-            <p className="text-gray-600">No data loaded yet.</p>
-          )}
-        </div>
-      </main>
-    </div>
-  );
-}
-
-----------------------------------------
-
-File: app\history\page.tsx
+File: app/history/page.tsx
 ----------------------------------------
 'use client';
 
@@ -5077,7 +3337,7 @@ export default function HistoryPage() {
 }
 ----------------------------------------
 
-File: app\history\[sessionId]\page.tsx
+File: app/history/[sessionId]/page.tsx
 ----------------------------------------
 // app/history/[sessionId]/page.tsx
 'use client';
@@ -5348,7 +3608,1618 @@ export default SessionDetail;
 
 ----------------------------------------
 
-File: app\login\page.tsx
+File: app/api/all-accounts/route.tsx
+----------------------------------------
+// app/api/all-accounts/route.ts
+import { NextResponse } from "next/server"
+
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL 
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN  
+
+export async function GET() {
+  try {
+    // Build remote URL
+    const remoteUrl = `${BASE_URL}/all_accounts?api_token=${API_TOKEN}`
+    console.log("Fetching from:", remoteUrl) 
+    // Server-to-server fetch => no CORS issue
+    const response = await fetch(remoteUrl)
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: `Upstream error: ${response.statusText}` },
+        { status: response.status }
+      )
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (err) {
+    console.error("Error in /api/all-accounts route:", err)
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+----------------------------------------
+
+File: app/api/llm/route.tsx
+----------------------------------------
+// File: app/api/llm/route.tsx
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';  // <-- For hashing our prompt
+
+export const dynamic = 'force-dynamic';
+
+const DEBUG_MODE_CREATE = process.env.NEXT_PUBLIC_DEBUG_MODE_CREATE === 'true';
+const DEBUG_LOG_FILE = 'debug-responses.jsonl';
+
+
+interface DeepSeekError {
+  error: {
+    message: string;
+    type: string;
+    code: string;
+  };
+}
+function generateCacheKey({
+  model,
+  prompt,
+  requestType,
+  context
+}: {
+  model: string;
+  prompt: string;
+  requestType?: string;
+  context?: string;
+}): string {
+  const raw = `${model}__${requestType ?? ''}__${context ?? ''}__${prompt}`;
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Returns the full file path for a given hash key.
+ * We store in /data/cache by default; create that folder if it doesn’t exist.
+ */
+function getCacheFilePath(hashKey: string): string {
+  const cacheDir = path.join(process.cwd(), 'data', 'cache');
+  return path.join(cacheDir, `${hashKey}.json`);
+}
+
+/**
+ * Attempts to read a cached response. Returns `null` if not found or parsing fails.
+ */
+function readFromCache(hashKey: string): { content: string; tokensUsed: number; responseTime: number } | null {
+  const filePath = getCacheFilePath(hashKey);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Cache read/parse error:', err);
+    return null;
+  }
+}
+
+/**
+ * Writes LLM response data to the cache as JSON.
+ */
+function writeToCache(
+  hashKey: string,
+  data: { content: string; tokensUsed: number; responseTime: number }
+): void {
+  const filePath = getCacheFilePath(hashKey);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+}
+
+
+function logLLMCall({
+  prompt,
+  model,
+  requestType,
+  userId,
+  response,
+  error,
+  logId
+}: {
+  prompt: string;
+  model: string;
+  requestType: string;
+  userId: string | null;
+  response?: string;
+  error?: string;
+  logId?: string;
+}) {
+  try {
+    const logsDir = path.join(process.cwd(), 'logs'); 
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
+      
+    const logFile = path.join(logsDir, 'llm-logs.txt');
+    const timestamp = new Date().toISOString();
+
+    let logEntry = `[${timestamp}] ${model} ${requestType}\n`;
+    logEntry += `Prompt: ${prompt}\n`;
+    if (response) logEntry += `Response: ${response}\n`;
+    if (error) logEntry += `Error: ${error}\n`;
+    logEntry += '----------------------------------------\n';
+
+    fs.appendFileSync(logFile, logEntry, 'utf8');
+
+    // 2) Structured debug logging when in create mode
+    if (DEBUG_MODE_CREATE) {
+      const debugFile = path.join(logsDir, DEBUG_LOG_FILE);
+      const debugEntry = {
+        timestamp,
+        model,
+        requestType,
+        userId,
+        logId,
+        prompt,
+        response,
+        error
+      };
+      
+      fs.appendFileSync(
+        debugFile,
+        JSON.stringify(debugEntry) + '\n',
+        'utf8'
+      );
+    }
+  } catch (err) {
+    console.error('Failed to write LLM call log:', err);
+  }
+}
+
+export async function POST(req: Request) {
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch (error) {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { prompt, context, history, model, format, requestType, logId, skipCache } = body || {};
+  if (!prompt || typeof prompt !== 'string') {
+    return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
+  }
+
+  const userId = req.headers.get('x-user-id');
+  const DEVELOPMENT = process.env.NEXT_PUBLIC_LLM_DEV_MODE === 'true';
+
+  // === CACHING LOGIC BELOW ===
+  // Generate cache key regardless of skipCache to handle errors
+  const cacheKey = generateCacheKey({ model, prompt, requestType, context });
+  
+  // If skipCache is NOT set, check cache first
+  let cached = null;
+  if (!skipCache) {
+    cached = readFromCache(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        content: cached.content,
+        tokensUsed: cached.tokensUsed,
+        responseTime: cached.responseTime
+      });
+    }
+  }
+
+  // -------------
+  // For local dev/test: Mock response quickly
+  // -------------
+  if (DEVELOPMENT) {
+    // Log the call in dev mode anyway
+    logLLMCall({
+      prompt,
+      model: model || 'no-model',
+      requestType: requestType || 'unknown',
+      userId,
+      response: '[MOCKED] No actual LLM call made',
+      logId
+    });
+
+    await new Promise(res => setTimeout(res, 500));
+    return NextResponse.json({
+      content: `[MOCK RESPONSE] ${model || 'no-model'} response...`,
+      tokensUsed: 42,
+    });
+  }
+
+  // -------------
+  // Actual LLM call
+  // -------------
+  try {
+    if (model?.startsWith('deepseek:')) {
+      const deepseekKey = process.env.DEEPSEEK_API_KEY;
+      if (!deepseekKey) {
+        console.error('DeepSeek API key missing');
+        return NextResponse.json(
+          { error: 'DeepSeek API key not configured' },
+          { status: 500 }
+        );
+      }
+
+      const modelName = model.replace('deepseek:', '');
+      const messages = [
+        { role: 'system', content: context || 'You are a helpful assistant.' },
+        ...(Array.isArray(history) ? history : []),
+        { role: 'user', content: prompt },
+      ];
+
+      const requestPayload = {
+        model: modelName,
+        messages,
+        temperature: 0.0,
+        max_tokens: 8000,
+        stream: false,
+      };
+
+      const startTime = Date.now();
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${deepseekKey}`,
+        },
+        body: JSON.stringify(requestPayload),
+      });
+      const responseTime = Date.now() - startTime;
+      const responseText = await response.text(); // Get raw response text
+
+      if (!response.ok) {
+        console.error('DeepSeek API Error Details:', {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseText,
+        });
+        // Log the failed call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `DeepSeek API Error: ${response.statusText}\nBody: ${responseText}`,
+          logId
+        });
+        return NextResponse.json(
+          { error: `DeepSeek API Error: ${response.statusText}`, details: responseText },
+          { status: 500 }
+        );
+      }
+
+      // Attempt to parse the JSON response from API
+      try {
+        const data = JSON.parse(responseText);
+        let content = '';
+
+        if (requestType === 'consolidation' || requestType === 'extract') {
+          // For structured data
+          const rawContent = data.choices?.[0]?.message?.content || '';
+          content = rawContent.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+        } else {
+          // Summaries, chat, etc.
+          content = data.choices?.[0]?.message?.content || '';
+        }
+
+        // Log the successful call
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          response: content,
+          logId
+        });
+
+        // Write to cache only if skipCache is false AND parsing succeeded
+        if (!skipCache && cacheKey) {
+          writeToCache(cacheKey, {
+            content,
+            tokensUsed: data.usage?.total_tokens || 0,
+            responseTime
+          });
+        }
+
+        return NextResponse.json({
+          content,
+          tokensUsed: data.usage?.total_tokens || 0,
+          responseTime,
+        });
+      } catch (parseError) {
+        // Write raw response to cache for debugging even if skipCache is true
+        writeToCache(cacheKey, {
+          content: responseText,
+          tokensUsed: 0,
+          responseTime
+        });
+
+        logLLMCall({
+          prompt,
+          model,
+          requestType: requestType || 'unknown',
+          userId,
+          error: `Response JSON Parse Error: ${String(parseError)}`,
+          response: responseText,
+          logId
+        });
+
+        return NextResponse.json(
+          {
+            error: 'Failed to parse API response',
+            response: responseText,
+            cacheFileName: `${cacheKey}.json` // Include cache filename
+          },
+          { status: 500 }
+        );
+      }
+    }
+
+    // If we eventually supported openai: or other, handle here...
+    return NextResponse.json({ error: 'Unsupported model provider' }, { status: 400 });
+  } catch (error: any) {
+    // Log any top-level error
+    logLLMCall({
+      prompt,
+      model: model || 'unknown',
+      requestType: requestType || 'unknown',
+      userId,
+      error: String(error),
+      logId
+    });
+
+    console.error('LLM Processing Error:', error);
+    return NextResponse.json(
+      {
+        error: 'LLM processing failed',
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+----------------------------------------
+
+File: app/api/test/route.tsx
+----------------------------------------
+// app/api/test/route.ts
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+export async function GET() {
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM files ORDER BY file_id;');
+    client.release();
+
+    return NextResponse.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching data', error);
+    return NextResponse.json({ error: 'Error fetching data' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/countTokens/route.tsx
+----------------------------------------
+
+
+----------------------------------------
+
+File: app/api/auth/signup/route.tsx
+----------------------------------------
+'use server';
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import bcrypt from 'bcryptjs';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { email, password, company, reason } = body;
+    if (!email || !password) {
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    }
+    const client = await pool.connect();
+    // Check if the user already exists
+    const userCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userCheck && userCheck.rowCount !== null && userCheck.rowCount > 0) {
+      client.release();
+      return NextResponse.json({ error: 'User already exists' }, { status: 400 });
+    }
+    // Hash the password
+    const salt = bcrypt.genSaltSync(10);
+    const password_hash = bcrypt.hashSync(password, salt);
+    // Insert new user
+    const result = await client.query(
+      `INSERT INTO users (email, password_hash, company, reason) 
+       VALUES ($1, $2, $3, $4) RETURNING user_id, email`,
+      [email, password_hash, company, reason]
+    );
+    client.release();
+    return NextResponse.json({ success: true, user: result.rows[0] }, { status: 200 });
+  } catch (error) {
+    console.error('Error in signup:', error);
+    return NextResponse.json({ error: 'Error signing up' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/auth/login/route.tsx
+----------------------------------------
+'use server';
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import bcrypt from 'bcryptjs';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { email, password } = body;
+    if (!email || !password) {
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    }
+    const client = await pool.connect();
+    const userRes = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+    client.release();
+    if (userRes.rowCount === 0) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+    const user = userRes.rows[0];
+    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
+    if (!passwordMatch) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+    // Return user data (do not include the password hash)
+    const userData = { user_id: user.user_id, email: user.email };
+    return NextResponse.json({ success: true, user: userData }, { status: 200 });
+  } catch (error) {
+    console.error('Error in login:', error);
+    return NextResponse.json({ error: 'Error logging in' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/company-facts/route.tsx
+----------------------------------------
+// app/api/company-facts/route.ts
+
+import { NextResponse } from "next/server"
+
+// We'll assume you're using .env for the base URL and token.
+// If not, you can hardcode them here.
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
+
+export async function GET(request: Request) {
+  try {
+    // 1) Extract query params from the incoming request
+    const { searchParams } = new URL(request.url)
+    // e.g. "320193"
+    const cik = searchParams.get("cik") ?? ""
+
+    // 2) Build the remote URL
+    const remoteUrl = `${BASE_URL}/company_facts?cik=${cik}&api_token=${API_TOKEN}`
+
+    console.log("Fetching from:", remoteUrl)
+
+    // 3) Fetch from the external API (server-to-server, no CORS issues here)
+    const response = await fetch(remoteUrl, {
+      method: "GET",
+    })
+
+    if (!response.ok) {
+      // e.g. 404, 500, ...
+      return NextResponse.json(
+        { error: `Upstream error: ${response.statusText}` },
+        { status: response.status }
+      )
+    }
+
+    // 4) Return the JSON response to the client
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (err) {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+----------------------------------------
+
+File: app/api/uploads/route.tsx
+----------------------------------------
+// app/api/uploads/route.ts
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import { FileNode } from '@/components/FileTree';
+
+export async function GET(request: Request) {
+  const userId = request.headers.get('x-user-id');
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const client = await pool.connect();
+    // 1) Fetch all uploads for this user:
+    const uploadsResult = await client.query(`
+      SELECT upload_id, upload_name, created_at
+      FROM uploads
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `, [userId]);
+
+    const uploads = uploadsResult.rows;
+    client.release();
+    return NextResponse.json({ uploads });
+  } catch (error) {
+    console.error('Error fetching uploads:', error);
+    return NextResponse.json({ error: 'Error fetching uploads' }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  let client;
+  try {
+    client = await pool.connect();
+    const body = await request.json();
+    const { uploadName, fileTree, extractedTexts, summaries, chatHistory } = body;
+
+    // 1) Validate user ID from headers
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // 2) Validate required fields
+    if (!uploadName) {
+      return NextResponse.json({ error: 'uploadName is required' }, { status: 400 });
+    }
+
+    // 3) Create a new "upload" row
+    const insertUploadRes = await client.query(
+      `INSERT INTO uploads (user_id, upload_name)
+       VALUES ($1, $2)
+       RETURNING upload_id`,
+      [userId, uploadName]
+    );
+    const newUploadId = insertUploadRes.rows[0].upload_id;
+
+    // 4) Gather all files from the fileTree
+    const filesToInsert: Array<{
+      fullPath: string;
+      fileName: string;
+      fileDataBase64?: string;
+      mimeType: string;
+    }> = [];
+
+    function traverseTree(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === 'file') {
+          filesToInsert.push({
+            fullPath: node.fullPath || '',
+            fileName: node.name,
+            fileDataBase64: node.base64Data, // base64 string from the frontend
+            mimeType: node.mimeType || 'application/octet-stream'
+          });
+        }
+        if (node.children?.length) {
+          traverseTree(node.children);
+        }
+      }
+    }
+    traverseTree(fileTree || []);
+
+    // 5) Insert each file row + extraction if applicable
+    for (const file of filesToInsert) {
+      const fileDataBuffer = file.fileDataBase64
+        ? Buffer.from(file.fileDataBase64, 'base64')
+        : null;
+
+      // Insert a row in "files"
+      const insertFileRes = await client.query(
+        `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING file_id`,
+        [
+          newUploadId,
+          file.fileName,
+          file.fullPath,
+          file.mimeType,
+          fileDataBuffer,
+          false
+        ]
+      );
+
+      const fileId = insertFileRes.rows[0].file_id;
+
+      // If there's text or summary, insert into "extractions"
+      const extractedText = extractedTexts?.[file.fullPath];
+      const summary = summaries?.[file.fullPath];
+      if (extractedText || summary) {
+        // Mark file as extracted
+        await client.query(
+          `UPDATE files SET is_extracted = TRUE WHERE file_id = $1`,
+          [fileId]
+        );
+
+        // Insert into "extractions"
+        await client.query(
+          `INSERT INTO extractions (file_id, extracted_text, summarized_text)
+           VALUES ($1, $2, $3)`,
+          [fileId, extractedText || null, summary || null]
+        );
+      }
+    }
+
+    client.release();
+
+    // Return the upload_id and chatHistory (if any)
+    return NextResponse.json(
+      { upload_id: newUploadId, chatHistory },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error('Error creating new upload:', error);
+    if (client) client.release();
+    return NextResponse.json(
+      { error: 'Error creating new upload' },
+      { status: 500 }
+    );
+  }
+}
+
+----------------------------------------
+
+File: app/api/uploads/[uploadId]/route.tsx
+----------------------------------------
+
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import { FileNode } from '@/components/FileTree';
+
+
+export async function DELETE(request: Request,{ params }: { params: { uploadId: string } }) {
+  let client;
+  try {
+    client = await pool.connect();
+    const uploadId = parseInt(params.uploadId,10);
+    if(isNaN(uploadId)) {
+      return NextResponse.json({ error:'Invalid upload ID'},{ status:400 });
+    }
+    //1) Find all files for this upload
+    const fileRes = await client.query(
+      'SELECT file_id FROM files WHERE upload_id=$1',[uploadId]
+    );
+    const fileIds = fileRes.rows.map(r=>r.file_id);
+    //2) Delete extractions for these files
+    if(fileIds.length>0) {
+      await client.query(
+        'DELETE FROM extractions WHERE file_id=ANY($1)',
+        [fileIds]
+      );
+    }
+    //3) Delete files themselves
+    await client.query('DELETE FROM files WHERE upload_id=$1',[uploadId]);
+    //4) Finally delete the upload
+    await client.query('DELETE FROM uploads WHERE upload_id=$1',[uploadId]);
+    client.release();
+    return NextResponse.json({ success:true },{ status:200 });
+  } catch(error) {
+    console.error('Error deleting entire upload:',error);
+    if(client) client.release();
+    return NextResponse.json({ error:'Error deleting upload'},{ status:500 });
+  }
+}
+
+
+export async function PATCH(request: Request,{ params }: { params: { uploadId: string } }) {
+  let client;
+  try {
+    client = await pool.connect();
+    const uploadId = parseInt(params.uploadId, 10);
+    if (isNaN(uploadId)) {
+      return NextResponse.json({ error: 'Invalid upload ID' }, { status: 400 });
+    }
+
+    const body = await request.json();
+    const { fileTree, extractedTexts, summaries } = body;
+    const filesToInsert: Array<{
+      fullPath: string;
+      fileName: string;
+      fileDataBase64?: string;
+      mimeType: string;
+    }> = [];
+
+    function traverseTree(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === 'file') {
+          filesToInsert.push({
+            fullPath: node.fullPath || '',
+            fileName: node.name,
+            fileDataBase64: node.base64Data, // from front end
+            mimeType: node.mimeType || 'application/octet-stream'
+          });
+        }
+        if (node.children?.length) traverseTree(node.children);
+      }
+    }
+    traverseTree(fileTree);
+
+    // For each file, either insert or update
+    for (const file of filesToInsert) {
+      const existingFileRes = await client.query(
+        `SELECT file_id FROM files WHERE upload_id = $1 AND file_path = $2`,
+        [uploadId, file.fullPath]
+      );
+      let fileId: number;
+      if (existingFileRes.rowCount && existingFileRes.rowCount > 0) {
+        fileId = existingFileRes.rows[0].file_id;
+        // Potentially update file_data if new base64 data is provided
+        if (file.fileDataBase64) {
+          const fileDataBuffer = Buffer.from(file.fileDataBase64, 'base64');
+          await client.query(
+            `UPDATE files
+                SET file_data = $2, mime_type=$3
+              WHERE file_id = $1`,
+            [fileId, fileDataBuffer, file.mimeType]
+          );
+        }
+      } else {
+        // Insert new file row
+        const fileDataBuffer = file.fileDataBase64
+          ? Buffer.from(file.fileDataBase64, 'base64')
+          : null;
+        const insertRes = await client.query(
+          `INSERT INTO files (upload_id, file_name, file_path, mime_type, file_data, is_extracted)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING file_id`,
+          [
+            uploadId,
+            file.fileName,
+            file.fullPath,
+            file.mimeType,
+            fileDataBuffer,
+            false
+          ]
+        );
+        fileId = insertRes.rows[0].file_id;
+      }
+
+      // Check if we have extraction for that path
+      const extractedText = extractedTexts[file.fullPath];
+      const summary = summaries[file.fullPath];
+      if (extractedText || summary) {
+        // Mark file as extracted
+        await client.query(`UPDATE files SET is_extracted = TRUE WHERE file_id = $1`, [fileId]);
+        // Upsert extraction
+        const existingExtractRes = await client.query(
+          `SELECT extraction_id FROM extractions WHERE file_id=$1`,
+          [fileId]
+        );
+        if (existingExtractRes.rowCount && existingExtractRes.rowCount > 0) {
+          await client.query(
+            `UPDATE extractions
+                SET extracted_text=$2,
+                    summarized_text=$3,
+                    updated_at=NOW()
+              WHERE file_id=$1`,
+            [fileId, extractedText || null, summary || null]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO extractions (file_id, extracted_text, summarized_text)
+             VALUES ($1,$2,$3)`,
+            [fileId, extractedText || null, summary || null]
+          );
+        }
+      }
+    }
+
+    client.release();
+    return NextResponse.json({ success: true, message: 'Upload updated.' });
+  } catch (error) {
+    console.error('Error updating upload:', error);
+    if (client) client.release();
+    return NextResponse.json({ error: 'Error updating upload' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/financial-data/route.tsx
+----------------------------------------
+// app/api/financial-data/route.ts
+import { NextResponse } from "next/server"
+import { Pool } from 'pg';
+
+const pool = new Pool({
+    port: 5432,
+    host: 'localhost',
+    user: 'postgres',
+    password: '1234',
+    database: 'sec_financial_data',
+});
+
+export async function GET(request: Request) {
+  try {
+    // 1) Parse query params from the URL
+    const { searchParams } = new URL(request.url)
+    const nameParam = (searchParams.get("name") ?? "").trim().toLowerCase()
+    const tickerParam = (searchParams.get("ticker") ?? "").trim().toLowerCase()
+    const cikParam = (searchParams.get("cik") ?? "").trim()
+
+    // 2) Prepare placeholders.
+    //    For name, we use a LIKE pattern if it's not empty: '%<name>%'
+    //    For ticker, we do an exact match but case-insensitive, so we store it in lowercase and compare with LOWER(t.ticker).
+    //    For cik, we do an exact match.
+    const nameFilter = nameParam ? `%${nameParam}%` : ""
+    const tickerFilter = tickerParam // empty if none provided
+    const cikFilter = cikParam // empty if none provided
+
+    // 3) Connect to the database
+    const client = await pool.connect()
+
+    // 4) Build and run the query
+    //    Explanation:
+    //    - LEFT JOIN `tickers` so we can gather possible tickers per `companies` row
+    //    - Filter with a combination of name, ticker, and/or cik
+    //    - If the corresponding parameter is empty, we skip that filter
+    //    - Group by c.cik, c.name so we can do array_agg on the tickers
+    const sql = `
+      SELECT
+        c.cik,
+        c.name,
+        ARRAY_AGG(t.ticker) AS tickers
+      FROM companies c
+      LEFT JOIN tickers t ON c.cik = t.cik
+      WHERE
+        ($1 = '' OR LOWER(c.name) LIKE $1)
+        AND ($2 = '' OR LOWER(t.ticker) = $2)
+        AND ($3 = '' OR c.cik = $3)
+      GROUP BY c.cik, c.name
+      ORDER BY c.name ASC
+      LIMIT 50;
+    `
+
+    const result = await client.query(sql, [
+      nameFilter,
+      tickerFilter,
+      cikFilter,
+    ])
+
+    client.release()
+
+    // 5) Return JSON response
+    return NextResponse.json(result.rows)
+  } catch (error) {
+    console.error("Error in /api/financial-data:", error)
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    )
+  }
+}
+
+----------------------------------------
+
+File: app/api/search/route.tsx
+----------------------------------------
+// app/api/search/route.ts
+import { NextResponse } from 'next/server';
+import pool from '../../../utils/db';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const query = searchParams.get('query') || '';
+
+  try {
+    const client = await pool.connect();
+    const searchQuery = `
+      SELECT 
+        c.cik,
+        c.name,
+        ARRAY_AGG(t.ticker) as tickers,
+        ts_rank(to_tsvector('english', c.name), plainto_tsquery('english', $1)) as rank
+      FROM companies c
+      LEFT JOIN tickers t ON c.cik = t.cik
+      WHERE 
+        to_tsvector('english', c.name) @@ plainto_tsquery('english', $1) OR
+        t.ticker = $1 OR
+        c.cik = $1
+      GROUP BY c.cik, c.name
+      ORDER BY rank DESC
+      LIMIT 10;
+    `;
+
+    const result = await client.query(searchQuery, [query]);
+    client.release();
+
+    return NextResponse.json(result.rows.map(row => ({
+      ...row,
+      searchTerm: row.tickers.includes(query.toUpperCase()) ? query.toUpperCase() : row.cik === query ? query : row.name
+    })));
+  } catch  {
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+----------------------------------------
+
+File: app/api/sessions/route.tsx
+----------------------------------------
+// app/api/sessions/route.tsx
+import { NextResponse } from 'next/server';
+import pool from '../../../utils/db';
+// app/api/sessions/route.tsx
+export async function GET(request: Request) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId || isNaN(parseInt(userId))) { // Add numeric validation
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  
+
+    const result = await client.query(`
+      SELECT 
+        s.session_id,
+        s.session_name,
+        s.created_at,
+        (SELECT COUNT(*)::int FROM files f WHERE f.session_id = s.session_id) AS file_count
+      FROM sessions s
+      WHERE s.user_id = $1
+      ORDER BY s.created_at DESC
+    `, [userId]);
+
+
+    
+    const sessions = result.rows.map((row) => ({
+      session_id: row.session_id,
+      session_name: row.session_name,
+      created_at: row.created_at,
+      file_count: row.file_count
+    }));
+
+    return NextResponse.json({ sessions });
+  } catch (error) {
+    console.error('Session load error:', error);
+    //alert(error);
+    return NextResponse.json({ error: 'Failed to load sessions' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+
+
+export async function POST(request: Request) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { sessionName } = await request.json();
+
+
+    //columns  session_id | user_id | session_name | created_at | expires_at
+    const result = await client.query(`
+      INSERT INTO sessions (user_id, session_name)
+      VALUES ($1, $2)
+      RETURNING session_id, created_at
+    `, [userId, sessionName]);
+
+   
+    const sessionId = result.rows[0].session_id;
+
+    await client.query('COMMIT');
+    return NextResponse.json({
+      success: true,
+      session_id: sessionId,
+      created_at: result.rows[0].created_at
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Session save error:', error);
+    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+----------------------------------------
+
+File: app/api/sessions/[sessionId]/route.tsx
+----------------------------------------
+// app/api/sessions/[sessionId]/route.tsx
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+import fs from 'fs';
+import path from 'path';
+
+export async function GET(
+  request: Request,
+  { params }: { params: { sessionId: string } }
+) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const sId = parseInt(params.sessionId, 10);
+    if (isNaN(sId)) {
+      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
+    }
+
+    const res = await client.query(
+      `SELECT session_id, session_name, created_at
+         FROM sessions
+        WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    if (res.rowCount === 0) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const session = res.rows[0];
+    return NextResponse.json({ session });
+  } catch (error) {
+    console.error('Error fetching session:', error);
+    return NextResponse.json({ error: 'Error fetching session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: { sessionId: string } }
+) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const sId = parseInt(params.sessionId, 10);
+    if (isNaN(sId)) {
+      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
+    }
+    // Optionally, remove the session reference from files (set session_id to NULL)
+    await client.query(
+      `UPDATE files SET session_id = NULL WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    const deleteResult = await client.query(
+      `DELETE FROM sessions WHERE session_id = $1 AND user_id = $2`,
+      [sId, userId]
+    );
+    if (deleteResult.rowCount === 0) {
+      // Nothing to delete or unauthorized
+      await client.query('ROLLBACK');
+      return NextResponse.json(
+        { error: 'Session not found or not authorized' },
+        { status: 404 }
+      );
+    }
+
+    await client.query('COMMIT');
+
+     // 3) Remove the session folder from disk (best-effort)
+    // data/<sessionId> is the folder holding heavyData.json + /files
+    const sessionPath = path.join(process.cwd(), 'data', String(sId));
+    try {
+      // Node 14 and below do not support fs.rmSync, so if you need older Node, use rmdirSync.
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`Deleted directory: ${sessionPath}`);
+    } catch (err) {
+      // Not critical if folder removal fails – but we log it.
+      console.error(`Failed to remove folder ${sessionPath}:`, err);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error deleting session:', error);
+    return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+----------------------------------------
+
+File: app/api/session-file/route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import mime from 'mime'; // install via `npm install mime` if you want to do more robust MIME detection
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const sessionId = searchParams.get('sessionId');
+    const filePath = searchParams.get('filePath');
+
+    if (!sessionId || !filePath) {
+      return NextResponse.json(
+        { error: 'Missing sessionId or filePath' },
+        { status: 400 }
+      );
+    }
+
+    // Construct the absolute path on disk
+    const absolutePath = path.join(
+      process.cwd(),
+      'data',
+      sessionId,
+      decodeURIComponent(filePath) // Add URI decoding
+    );
+
+    console.log('Serving file:', absolutePath);
+
+    if (!fs.existsSync(absolutePath)) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+
+    // Read file from disk
+    const fileBuffer = fs.readFileSync(absolutePath);
+
+    // Infer MIME type from the filename extension, or fall back to octet-stream
+    const mimeType = mime.getType(absolutePath) || 'application/octet-stream';
+
+    const headers = {
+      'Content-Type': mimeType,
+      'Content-Disposition': `inline; filename="${path.basename(absolutePath)}"`,
+    };
+    // Add proper PDF content disposition
+    if (mimeType === 'application/pdf') {
+      headers['Content-Disposition'] = `inline; filename="${path.basename(absolutePath)}"`;
+    } else {
+      headers['Content-Disposition'] = `attachment; filename="${path.basename(absolutePath)}"`;
+    }
+
+    // Return the file bytes in the response
+    return new NextResponse(fileBuffer, {
+      headers: headers,
+    });
+  } catch (error) {
+    console.error('Error serving file:', error);
+    return NextResponse.json({ error: 'File serving error' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/files/route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+export async function POST(request: Request) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const formData = await request.formData();
+    const files = formData.getAll('files') as File[];
+    
+    if (!files || files.length === 0) {
+      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
+    }
+
+    const insertedFiles = [];
+    
+    for (const file of files) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const result = await client.query(
+        `INSERT INTO files 
+         (user_id, file_name, file_type, file_data, session_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING file_id`,
+         [userId, file.name, file.type, buffer, request.headers.get('x-session-id')]
+      );
+      insertedFiles.push(result.rows[0].file_id);
+    }
+
+    return NextResponse.json({ success: true, fileIds: insertedFiles });
+  } catch (error) {
+    console.error('File upload error:', error);
+    return NextResponse.json({ error: 'File upload failed' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function GET() {
+  try {
+    const client = await pool.connect();
+    const result = await client.query(`SELECT * FROM files;`);
+    client.release();
+
+    return NextResponse.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: 'Error fetching files' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/files/[fileId]/route.tsx
+----------------------------------------
+import { NextResponse } from 'next/server';
+import pool from '@/utils/db';
+
+
+export async function GET(
+  request: Request,
+  { params }: { params: { fileId: string } }
+) {
+  const client = await pool.connect();
+  try {
+    const fileId = parseInt(params.fileId);
+    if (isNaN(fileId)) {
+      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
+    }
+
+    const result = await client.query(
+      `SELECT file_name, file_type, file_data 
+       FROM files 
+       WHERE file_id = $1`,
+      [fileId]
+    );
+
+    if (result.rowCount === 0) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+
+    const file = result.rows[0];
+    return new NextResponse(file.file_data, {
+      headers: {
+        'Content-Type': file.file_type,
+        'Content-Disposition': `attachment; filename="${file.file_name}"`
+      }
+    });
+  } catch (error) {
+    console.error('File download error:', error);
+    return NextResponse.json({ error: 'File download failed' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: { fileId: string } }
+) {
+  let client;
+  try {
+    client = await pool.connect();
+    const fileId = parseInt(params.fileId, 10);
+    if (isNaN(fileId)) {
+      return NextResponse.json({ error: 'Invalid file ID' }, { status: 400 });
+    }
+
+    // Remove any extractions for this file, then remove the file itself
+    await client.query('DELETE FROM extractions WHERE file_id = $1', [fileId]);
+    await client.query('DELETE FROM files WHERE file_id = $1', [fileId]);
+
+    client.release();
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    if (client) client.release();
+    return NextResponse.json({ error: 'Error deleting file' }, { status: 500 });
+  }
+}
+
+----------------------------------------
+
+File: app/api/submission-history/route.tsx
+----------------------------------------
+// app/api/submission-history/route.ts
+
+import { NextResponse } from "next/server"
+
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const cik = searchParams.get("cik") ?? ""
+
+    const remoteUrl = `${BASE_URL}/submission_history?cik=${cik}&api_token=${API_TOKEN}`
+    const response = await fetch(remoteUrl, { method: "GET" })
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: `Upstream error: ${response.statusText}` },
+        { status: response.status }
+      )
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (err) {
+    console.error("Error in /api/submission-history route:", err)
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+----------------------------------------
+
+File: app/api/account-data/route.tsx
+----------------------------------------
+// app/api/account-data/route.ts
+import { NextResponse } from "next/server"
+
+const BASE_URL = process.env.NEXT_PUBLIC_EXTERNAL_API_BASE_URL
+const API_TOKEN = process.env.NEXT_PUBLIC_EXTERNAL_API_TOKEN
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    // e.g. "AccountsPayableCurrent"
+    const accountParam = searchParams.get("account") ?? ""
+    // e.g. "2022" or "2023"
+    const yearParam = searchParams.get("year") ?? ""
+
+    if (!accountParam) {
+      return NextResponse.json({ error: "Missing 'account' query param" }, { status: 400 })
+    }
+
+    // Remote endpoint might be something like:
+    //    /all_data_for_account?account=AccountsPayableCurrent&year=2022&api_token=...
+    const remoteUrl = `${BASE_URL}/all_data_for_account?account=${accountParam}&year=${yearParam}&api_token=${API_TOKEN}`
+
+    const response = await fetch(remoteUrl)
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: `Upstream error: ${response.statusText}` },
+        { status: response.status }
+      )
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (err) {
+    console.error("Error in /api/account-data route:", err)
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+----------------------------------------
+
+File: app/api/store-heavy-data/route.tsx
+----------------------------------------
+// app/api/store-heavy-data/route.ts
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import { FileNode } from '@/components/FileTree';
+
+export async function POST(request: Request) {
+  try {
+    const { sessionId, heavyData } = await request.json();
+    if (!sessionId) {
+      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
+    }
+
+    // 1) Create the directory structure: data/sessionId/files
+    const dataDir = path.join(process.cwd(), 'data', sessionId.toString());
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const filesDir = path.join(dataDir, 'files');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(filesDir)) {
+      fs.mkdirSync(filesDir);
+    }
+
+    // 2) For each file node in fileTree, decode base64 -> raw file
+    function storeFilesRecursively(nodes: FileNode[]): FileNode[] {
+      return nodes.map((node, idx) => {
+        if (node.type === 'folder' && node.children) {
+          return { ...node, children: storeFilesRecursively(node.children) };
+        }
+        if (node.type === 'file' && node.base64Data) {
+          // decode base64
+          const buffer = Buffer.from(node.base64Data, 'base64');
+          // create a unique filename. You can also keep the original name if you prefer
+          // but we add idx or a timestamp to avoid collisions:
+          const safeName = node.name.replace(/[^\w\d.]+/g, '_');
+          const fileName = `file_${Date.now()}_${idx}_${safeName}`;
+          const filePath = path.join(filesDir, fileName);
+
+          // 3) Write the file to data/sessionId/files/
+          fs.writeFileSync(filePath, buffer);
+
+          // 4) Remove base64Data from the node, and add localPath
+          return {
+            ...node,
+            base64Data: undefined,
+            rawData: undefined,
+            localPath: `files/${fileName}`
+          };
+        }
+        return node;
+      });
+    }
+
+    // If there's a fileTree, store each file on disk
+    let updatedFileTree: FileNode[] = [];
+    if (heavyData.fileTree) {
+      updatedFileTree = storeFilesRecursively(heavyData.fileTree);
+    }
+
+    // 5) Overwrite heavyData.fileTree with the updated one
+    const filePath = path.join(dataDir, 'heavyData.json');
+    const existingData = fs.existsSync(filePath) 
+                ? JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+                : {};
+
+    const finalHeavyData = {
+      ...existingData,
+      ...heavyData,
+      consolidatedCompanies: heavyData.consolidatedCompanies || [],
+    };
+    fs.writeFileSync(filePath, JSON.stringify(finalHeavyData, null, 2));
+    return NextResponse.json({ success: true, filePath });
+  } catch (error) {
+
+    return NextResponse.json(
+      { error: 'Failed to save heavy data' + error },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const sessionId = searchParams.get('sessionId');
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
+  }
+
+  try {
+    const dataDir = path.join(process.cwd(), 'data', sessionId);
+    const filePath = path.join(dataDir, 'heavyData.json');
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json({ error: 'No heavyData found' }, { status: 404 });
+    }
+
+    const data = fs.readFileSync(filePath, 'utf-8');
+    return NextResponse.json(JSON.parse(data));
+  } catch (error) {
+    console.error('Error reading heavy data:', error);
+    return NextResponse.json({ error: 'Heavy data not found' }, { status: 404 });
+  }
+}
+
+----------------------------------------
+
+File: app/data/page.tsx
+----------------------------------------
+"use client";
+
+import { useState } from "react";
+import { SearchForm } from "@/components/ui/search-form";
+import { SearchResults } from "@/components/ui/search-results";
+import { Skeleton } from "@/components/ui/skeleton";
+import Navbar from "@/components/Navbar";
+
+// If you have a Navbar component like in HistoryPage, import it:
+// import Navbar from "@/components/Navbar";
+
+export default function DataPage() {
+  const [results, setResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  async function handleSearch(params: { name: string; ticker: string; cik: string }) {
+    console.log("Searching with:", params); // <-- Debug log
+    setIsSearching(true);
+    try {
+      // Construct a query string with name, ticker, cik
+      const searchParams = new URLSearchParams({
+        name: params.name.trim(),
+        ticker: params.ticker.trim(),
+        cik: params.cik.trim(),
+      });
+
+      const response = await fetch(`/api/financial-data?${searchParams.toString()}`);
+      const data = await response.json();
+      console.log("Data received:", data); // <-- Debug log
+      setResults(data || []);
+    } catch (error) {
+      console.error("Error fetching financial data:", error);
+      setResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+     
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
+          SEC Financial Data Explorer
+        </h1>
+
+        {/* Our new SearchForm component */}
+        <SearchForm onSearch={handleSearch} />
+
+        {/* Results or loading skeletons */}
+        {isSearching ? (
+          <div className="mt-8 space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-6 w-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="mt-8">
+            <SearchResults results={results} />
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: app/data/[cik]/page.tsx
+----------------------------------------
+// app/data/[cik]/page.tsx
+export const dynamic = "force-dynamic";
+import { CompanyFactsPage } from "@/components/ui/company-facts-page";
+import Navbar from "@/components/Navbar";
+interface CompanyDataPageProps {
+  params: {
+    cik: string;
+  };
+}
+
+
+
+export default async function CompanyDataPage({ params }: CompanyDataPageProps) {
+  const { cik } = await params;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800 text-center">
+          Company Financial Facts & Info
+        </h1>
+
+        {/* Our client component with all the logic */}
+        <CompanyFactsPage cik={cik} />
+      </main>
+    </div>
+  );
+}
+
+----------------------------------------
+
+File: app/login/page.tsx
 ----------------------------------------
 // app/login/page.tsx
 'use client';
@@ -5443,430 +5314,555 @@ export default function LoginPage() {
 
 ----------------------------------------
 
-File: app\settings\page.tsx
+File: app/companies/page.tsx
 ----------------------------------------
+// app/companies/page.tsx
 'use client';
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+
+import React, { useEffect, useState } from 'react';  // <-- ensure React is imported
+import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-import { 
-  defaultSummarizationTemplate,
-  defaultExtractionTemplate,
-  defaultConsolidationTemplate,
-  defaultVariableExtraction
-} from '@/lib/prompts';
+import { useRouter } from 'next/navigation';
+import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
 
-export default function SettingsPage() {
-  const [user, setUser] = useState<any>(null);
-  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [message, setMessage] = useState('');
-  const router = useRouter();
-
-
-const [summarizationTemplate, setSummarizationTemplate] = useState(defaultSummarizationTemplate);
-const [extractionTemplate, setExtractionTemplate] = useState(defaultExtractionTemplate);
-const [consolidationTemplate, setConsolidationTemplate] = useState(defaultConsolidationTemplate);
-const [variableExtraction, setVariableExtraction] = useState(defaultVariableExtraction);
-
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      const userId = localStorage.getItem('userId');
-      const email = localStorage.getItem('userEmail');
-      if (!userId || !email) {
-        router.push('/login');
-        return;
-      }
-      setUser({ id: userId, email });
-
-      // Load saved templates
-      const savedSummarization = localStorage.getItem('summarizationTemplate');
-      const savedExtraction = localStorage.getItem('extractionTemplate');
-      const savedConsolidation = localStorage.getItem('consolidationTemplate');
-      const savedVariableExtraction = localStorage.getItem('variableExtraction');
-            
-      if (savedSummarization) setSummarizationTemplate(savedSummarization);
-      if (savedExtraction) setExtractionTemplate(savedExtraction);
-      if (savedConsolidation) setConsolidationTemplate(savedConsolidation);
-      if (savedVariableExtraction) setVariableExtraction(savedVariableExtraction);
-      
-      // Fetch API keys from your local endpoint
-      try {
-        const res = await fetch(`/api/api-keys?userId=${userId}`);
-        const text = await res.text();
-        let data = {};
-        try {
-          data = text ? JSON.parse(text) : {};
-        } catch (error) {
-          console.error("Error parsing API keys JSON: ", error);
-        }
-        if ((data as any).apiKeys) {
-          setApiKeys(
-            Object.fromEntries(
-              (data as any).apiKeys.map((k: { provider: string; decrypted_key: string }) => [
-                k.provider,
-                k.decrypted_key
-              ])
-            )
-          );
-        }
-      } catch (err) {
-        console.error('Error fetching API keys:', err);
-      }
-    };
-    fetchUser();
-  }, [router]);
-
-  const saveTemplates = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      localStorage.setItem('summarizationTemplate', summarizationTemplate);
-      localStorage.setItem('extractionTemplate', extractionTemplate);
-      localStorage.setItem('consolidationTemplate', consolidationTemplate);
-      localStorage.setItem('variableExtraction', variableExtraction);
-      setMessage('Templates saved successfully');
-    } catch (err) {
-      setMessage('Error saving templates');
-      console.error(err);
-    }
+interface VariableData {
+  value?: number | string;
+  currency?: string;
+  unit?: string;
+  sources: Array<{
+    filePath: string;
+    pageNumber?: number;
+    confidence?: number;
+  }>;
+  [year: number]: {
+    value?: number | string;
+    currency?: string;
+    unit?: string;
+    sources: Array<{
+      filePath: string;
+      pageNumber?: number;
+      confidence?: number;
+    }>;
   };
-
-  const updateProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/user', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: user.email,
-          company: user.company // if you store company info
-        }),
-      });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Error updating profile');
-      setMessage('Profile updated successfully');
-    } catch (err) {
-      setMessage('Error updating profile');
-      console.error(err);
-    }
-  };
-
-  const changePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/user/password', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          currentPassword,
-          newPassword,
-        }),
-      });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Error changing password');
-      setMessage('Password changed successfully');
-    } catch (err) {
-      setMessage('Error changing password');
-      console.error(err);
-    }
-  };
-
-  const saveApiKeys = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const updates = Object.entries(apiKeys).map(([provider, key]) => ({
-        user_id: user.id,
-        provider,
-        decrypted_key: key,
-        updated_at: new Date().toISOString()
-      }));
-
-      const res = await fetch('/api/api-keys', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates }),
-      });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Error saving API keys');
-      setMessage('API keys updated successfully');
-    } catch (err) {
-      setMessage('Error saving API keys');
-      console.error(err);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-     <Navbar />
-      <main className="max-w-2xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">Settings</h1>
-
-        {/* Profile Section */}
-        <form onSubmit={updateProfile} className="bg-white p-6 rounded-lg shadow mb-6">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800">Profile</h2>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-600 mb-1">Email</label>
-            <input
-              type="email"
-              value={user?.email || ''}
-              className="w-full p-2 border rounded text-gray-700"
-              disabled
-            />
-          </div>
-          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
-            Update Profile
-          </button>
-        </form>
-
-        {/* Password Change */}
-        <form onSubmit={changePassword} className="bg-white p-6 rounded-lg shadow mb-6">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800">Change Password</h2>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-600 mb-1">Current Password</label>
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full p-2 border rounded text-gray-700"
-            />
-          </div>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-600 mb-1">New Password</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full p-2 border rounded text-gray-700"
-            />
-          </div>
-          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
-            Change Password
-          </button>
-        </form>
-
-        {/* API Keys */}
-        <form onSubmit={saveApiKeys} className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800">API Keys</h2>
-          {['openai', 'anthropic', 'cohere'].map((provider) => (
-            <div key={provider} className="mb-4">
-              <label className="block text-sm font-medium text-gray-600 mb-1 capitalize">
-                {provider} API Key
-              </label>
-              <input
-                type="password"
-                value={apiKeys[provider] || ''}
-                onChange={(e) =>
-                  setApiKeys({ ...apiKeys, [provider]: e.target.value })
-                }
-                className="w-full p-2 border rounded text-gray-700"
-              />
-            </div>
-          ))}
-          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
-            Save API Keys
-          </button>
-        </form>
-
-          {/* LLM Prompt Templates Section */}
-        <form onSubmit={saveTemplates} className="bg-white p-6 rounded-lg shadow mt-6">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800">LLM Prompt Templates</h2>
-          <p className="mb-2 text-gray-600">Customize the prompt templates used at each step.</p>
-          
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Summarization Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={6}
-            value={summarizationTemplate}
-            onChange={(e) => setSummarizationTemplate(e.target.value)}
-          />
-
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Extraction Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={8}
-            value={extractionTemplate}
-            onChange={(e) => setExtractionTemplate(e.target.value)}
-          />
-
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Consolidation Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={10}
-            value={consolidationTemplate}
-            onChange={(e) => setConsolidationTemplate(e.target.value)}
-          />
-
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Variable Extraction Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={6}
-            value={variableExtraction}
-            onChange={(e) => setVariableExtraction(e.target.value)}
-          />
-
-          <button type="submit" className="mt-4 bg-blue-600 text-white px-4 py-2 rounded">
-            Save Templates
-          </button>
-        </form>
-
-        {message && (
-          <div className="mt-4 p-3 bg-blue-100 text-blue-800 rounded text-gray-700">
-            {message}
-          </div>
-        )}
-      </main>
-    </div>
-  );
 }
 
-----------------------------------------
+interface ConsolidatedCompany {
+  name: string;
+  type: 'company' | 'fund';
+  description: string;
+  variables: Record<string, VariableData>;
+  dates: string[];
+  parent?: string;
+  children?: ConsolidatedCompany[];
+  ownershipPath: string[];
+  sources: Array<{
+    filePath: string;
+    pageNumber?: number;
+    confidence?: number;
+  }>;
+  // The following are optional properties that might be present for "fund" types or other data structures:
+  investments?: Array<{
+    company: string;
+    ownershipPercentage?: number;
+  }>;
+  subsidiaries?: string[];
+}
 
-File: app\signup\page.tsx
-----------------------------------------
-'use client';
-
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import Navbar from '@/components/Navbar';
-
-export default function SignupPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [company, setCompany] = useState('');
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState('');
+export default function CompaniesPage() {
   const router = useRouter();
-  const handleSignup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMessage('');
-    
-    if (!email || !password || !company || !reason) {
-      setError('Please fill out all fields');
-      return;
-    }
+  const searchParams = useSearchParams();
+  const existingSessionId = searchParams.get('sessionId');
   
-    try {
-      const response = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email,
-          password,
-          company,
-          reason
-        }),
+  const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
+  const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
+
+  // New state for raw JSON toggling
+  const [shownJson, setShownJson] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) return; // Not logged in
+    fetch('/api/sessions', {
+      headers: { 'x-user-id': userId }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.sessions) {
+          setSessions(data.sessions);
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching sessions for Companies page:', err);
       });
-  
-      const data = await response.json();
-  
-      if (!response.ok) {
-        throw new Error(data.error || 'Signup failed');
+  }, []);
+
+  useEffect(() => {
+    const fetchConsolidatedData = async () => {
+      if (!existingSessionId) {
+        setLoading(false);
+        return;
       }
-  
-      setSuccessMessage('Sign-up successful! Redirecting to login...');
-      setTimeout(() => {
-        router.push('/login');
-      }, 3000);
-    } catch (err) {
-      console.error('Signup Error:', err);
-      setError(err instanceof Error ? err.message : 'Error creating account. Please try again.');
-    }
+      try {
+        const response = await fetch(`/api/store-heavy-data?sessionId=${existingSessionId}`);
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const data = await response.json();
+
+        if (data.consolidatedCompanies) {
+          setCompanies(data.consolidatedCompanies);
+        } else {
+          setCompanies([]);
+        }
+      } catch (error) {
+        console.error('Error loading companies:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchConsolidatedData();
+  }, [existingSessionId]);
+
+  // Add conditional rendering for the "no company data retrieved" message
+  if (searchParams.get('message') === 'noData') {
+    return (
+      <div className="min-h-screen bg-gray-50 text-gray-600">
+        <main className="max-w-7xl mx-auto px-4 py-8">
+          <p className="text-center text-gray-600">No company data retrieved.</p>
+        </main>
+      </div>
+    );
+  }
+
+  const getCompanyYears = (company: ConsolidatedCompany): number[] => {
+    const years = new Set<number>();
+    Object.values(company.variables).forEach(variable => {
+      Object.keys(variable).forEach(yearStr => {
+        const year = parseInt(yearStr, 10);
+        if (!isNaN(year)) years.add(year);
+      });
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="max-w-7xl mx-auto px-4 py-8">
+          <p>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const renderCompanySection = (type: 'company' | 'fund', color: string) => {
+    const filteredCompanies = companies.filter(c => c.type === type);
+    if (filteredCompanies.length === 0) return null;
+
+    return (
+      <div className="mb-8 text-gray-500">
+        <h2 className="text-xl font-bold mb-4" style={{ color }}>
+          {type === 'fund' ? 'Funds' : 'Companies'}
+        </h2>
+        {filteredCompanies.map(company => {
+          const companyYears = getCompanyYears(company);
+          const latestYear = companyYears[0] || null;
+          const selectedYear = selectedYears[company.name] ?? latestYear;
+
+          return (
+            <div 
+              key={company.name}
+              className="bg-white p-6 rounded-lg shadow-sm mb-4 border-l-4"
+              style={{ borderColor: color }}
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold">{company.name}</h2>
+                <div className="flex items-center gap-3">
+                  {companyYears.length > 0 && (
+                    <select
+                      value={selectedYear || ''}
+                      onChange={(e) => {
+                        const year = parseInt(e.target.value, 10);
+                        setSelectedYears(prev => ({
+                          ...prev,
+                          [company.name]: year
+                        }));
+                      }}
+                      className="px-4 py-2 border rounded"
+                    >
+                      {companyYears.map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={() => {
+                      const newSet = new Set(expandedOwnership);
+                      newSet.has(company.name) 
+                        ? newSet.delete(company.name) 
+                        : newSet.add(company.name);
+                      setExpandedOwnership(newSet);
+                    }}
+                    className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm"
+                  >
+                    {expandedOwnership.has(company.name) 
+                      ? 'Hide Ownership' 
+                      : 'Show Ownership'}
+                  </button>
+                </div>
+              </div>
+              
+              {company.description && (
+                <p className="text-gray-600 mb-4">{company.description}</p>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Updated Variable Display Logic */}
+                {Object.entries(company.variables).map(([varName, variableData]) => {
+                  let varData: any = null;
+                  
+                  // Check for year-specific data
+                  if (selectedYear !== null) {
+                    varData = variableData[selectedYear];
+                  } 
+                  // Fallback to general value if no year is selected
+                  else if (variableData.value !== undefined) {
+                    varData = variableData;
+                  }
+
+                  return varData ? (
+                    <div key={varName} className="p-4 rounded" style={{ backgroundColor: `${color}10` }}>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium capitalize">
+                          {varName.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-sm text-gray-600">
+                          {varData.currency} {varData.value?.toLocaleString()}
+                          {varData.unit}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-500">
+                        Sources:
+                        {varData.sources?.map((source: any, idx: number) => (
+                          <div key={idx} className="mt-1">
+                            • {source.filePath.split('/').pop()} 
+                            {source.pageNumber && ` (Page ${source.pageNumber})`}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null;
+                })}
+                
+                {/* Conditionally Rendered Ownership Structure */}
+                {expandedOwnership.has(company.name) && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <h3 className="text-lg font-semibold mb-2">Ownership Structure</h3>
+                    <OwnershipTree company={company} />
+                  </div>
+                )}
+              </div>
+
+              {/* Show/Hide Raw Data Button & JSON Preview */}
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    const newSet = new Set(shownJson);
+                    newSet.has(company.name) 
+                      ? newSet.delete(company.name) 
+                      : newSet.add(company.name);
+                    setShownJson(newSet);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  {shownJson.has(company.name) ? 'Hide Raw Data' : 'Show Raw Data'}
+                </button>
+                
+                {shownJson.has(company.name) && (
+                  <div className="mt-2 p-3 bg-gray-50 rounded">
+                    <pre className="text-xs overflow-auto max-h-96">
+                      {JSON.stringify(company, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
-      <main className="flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
-          <h1 className="text-2xl font-bold text-center text-blue-600 mb-6">
-            Create Your Account
-          </h1>
-          {successMessage && (
-            <div className="mb-4 bg-green-100 border border-green-200 text-green-800 p-3 rounded-md">
-              {successMessage}
+      <main className="max-w-7xl mx-auto px-4 py-8">
+
+        {/* Session Selector */}
+        <div className="mb-4 text-gray-500">
+          <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
+          <select
+            className="border p-2 rounded"
+            value={existingSessionId || ''}
+            onChange={(e) => {
+              const newSessionId = e.target.value;
+              router.push(`/companies?sessionId=${newSessionId}`);
+            }}
+          >
+            <option value="">-- Choose a session --</option>
+            {sessions.map((s) => (
+              <option key={s.session_id} value={s.session_id}>
+                {s.session_name} (ID: {s.session_id})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {renderCompanySection('fund', '#2563eb')}
+        {renderCompanySection('company', '#16a34a')}
+      </main>
+    </div>
+  );
+}
+
+// OwnershipTree component with investments and subsidiaries display
+const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
+  <div className="ml-4 border-l-2 border-gray-200 pl-4">
+    {/* Existing ownership path */}
+    {company.ownershipPath?.map((owner, idx) => (
+      <div key={idx} className="text-sm text-gray-600">
+        {idx === 0 ? 'Root Owner:' : '→'} {owner}
+      </div>
+    ))}
+    
+    {/* Display investments for funds */}
+    {company.type === 'fund' && (company.investments ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Investments:</h4>
+        {(company.investments ?? []).map((investment, idx) => (
+          <div key={idx} className="flex items-center gap-2 text-sm">
+            <span>{investment.company}</span>
+            {investment.ownershipPercentage && (
+              <span className="text-gray-500">
+                ({investment.ownershipPercentage}%)
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* Display subsidiaries */}
+    {(company.subsidiaries ?? []).length > 0 && (
+      <div className="mt-2">
+        <h4 className="font-semibold text-sm mb-1">Subsidiaries:</h4>
+        {(company.subsidiaries ?? []).map((sub, idx) => (
+          <div key={idx} className="text-sm">{sub}</div>
+        ))}
+      </div>
+    )}
+
+    {/* Recursive children */}
+    {company.children?.map(child => (
+      <div key={child.name} className="mt-2">
+        <div className="font-medium">{child.name}</div>
+        <OwnershipTree company={child} />
+      </div>
+    ))}
+  </div>
+);
+
+----------------------------------------
+
+File: app/data-aggregated/page.tsx
+----------------------------------------
+// app/data-aggregated/page.tsx
+
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+
+type AccountKey = string; // e.g. "AccountsPayableCurrent", "Assets", etc.
+interface AccountDefinition {
+  description: string;
+  instant: number;       // 1 or 0
+  name: string;
+  taxonomy: string;      // e.g. "us-gaap"
+  units: string;         // e.g. "USD" or "shares"
+}
+
+// Suppose the aggregated data from your remote returns array of objects
+// e.g. { cik: '0000320193', year: 2022, value: 123456, ... }
+interface AggregatedDataItem {
+  cik: string;
+  year: number;
+  value: number;
+  [key: string]: string | number;
+}
+
+export default function DataAggregatedPage() {
+  // 1) States
+  const [accounts, setAccounts] = useState<Record<AccountKey, AccountDefinition>>({})
+  const [loadingAccounts, setLoadingAccounts] = useState(false)
+
+  const [selectedAccount, setSelectedAccount] = useState<string>("")
+  const [year, setYear] = useState<string>("2022")
+
+  const [loadingData, setLoadingData] = useState(false)
+  const [aggregatedData, setAggregatedData] = useState<AggregatedDataItem[]>([])
+
+  const [error, setError] = useState<string>("")
+
+  // 2) Fetch all accounts on mount
+  useEffect(() => {
+    async function fetchAccounts() {
+      setLoadingAccounts(true)
+      try {
+        const res = await fetch("/api/all-accounts")
+        if (!res.ok) {
+          const err = await res.json()
+          throw new Error(err.error || "Failed fetching accounts.")
+        }
+        const data = await res.json()
+        setAccounts(data)
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          setError(`Error: ${err.message}`)
+        } else {
+          setError("Unknown error fetching accounts.")
+        }
+      } finally {
+        setLoadingAccounts(false)
+      }
+    }
+    fetchAccounts()
+  }, [])
+
+  // 3) Function to load aggregated data for the chosen account
+  async function handleLoadData() {
+    if (!selectedAccount) {
+      alert("Please select an account first.")
+      return
+    }
+
+    setLoadingData(true)
+    setAggregatedData([])
+    setError("")
+
+    try {
+      // e.g. /api/account-data?account=AccountsPayableCurrent&year=2022
+      const query = new URLSearchParams({
+        account: selectedAccount,
+        year: year || "",
+      })
+      const res = await fetch(`/api/account-data?${query.toString()}`)
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || "Failed fetching aggregated data.")
+      }
+      const data = await res.json()
+      // data is presumably an array of { cik, value, ... }
+      setAggregatedData(data)
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(`Error: ${err.message}`)
+      } else {
+        setError("Unknown error fetching aggregated data.")
+      }
+    } finally {
+      setLoadingData(false)
+    }
+  }
+
+  // 4) Render
+  const accountKeys = Object.keys(accounts)
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+        <h1 className="text-2xl font-bold text-center text-gray-800 mb-4">
+          Aggregated Data by Account
+        </h1>
+
+        {/* If error */}
+        {error && <p className="text-red-600">{error}</p>}
+
+        {/* Accounts dropdown */}
+        <div className="bg-white p-4 shadow rounded space-y-4 text-gray-600">
+          <label className="block font-semibold">Select an Account:</label>
+          {loadingAccounts ? (
+            <Skeleton className="h-6 w-full text-gray-600" />
+          ) : (
+            <select
+              className="border rounded px-2 py-1 w-full text-sm"
+              value={selectedAccount}
+              onChange={(e) => setSelectedAccount(e.target.value)}
+            >
+              <option value="">-- Choose an account --</option>
+              {accountKeys.map((key) => (
+                <option key={key} value={key}>
+                  {key} ({accounts[key].units})
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Optional year input */}
+          <label className="block font-semibold">Year:</label>
+          <input
+            type="text"
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+            placeholder="e.g. 2022"
+            className="border rounded px-2 py-1 w-full text-sm"
+          />
+
+          {/* Button to load data */}
+          <div className="text-right">
+            <button
+              onClick={handleLoadData}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            >
+              Load Aggregated Data
+            </button>
+          </div>
+        </div>
+
+        {/* Aggregated data results */}
+        <div className="bg-white p-4 shadow rounded">
+          {loadingData && <Skeleton className="h-4 w-full" />}
+          {!loadingData && aggregatedData.length > 0 && (
+            <div>
+              <h2 className="font-semibold mb-2 text-lg">
+                Results for {selectedAccount} ({year || "All Years"})
+              </h2>
+              <table className="w-full border text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border p-2 text-left">CIK</th>
+                    <th className="border p-2 text-left">Year</th>
+                    <th className="border p-2 text-left">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aggregatedData.map((item, idx) => (
+                    <tr key={idx}>
+                      <td className="border p-2">{item.cik}</td>
+                      <td className="border p-2">{item.year}</td>
+                      <td className="border p-2">{item.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-          {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-          <form onSubmit={handleSignup} className="space-y-4">
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">
-                Email
-              </label>
-              <input
-                type="email"
-                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                placeholder="Enter your email"
-              />
-            </div>
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                placeholder="Create a password"
-              />
-            </div>
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">
-                Company
-              </label>
-              <input
-                type="text"
-                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
-                value={company}
-                onChange={(e) => setCompany(e.target.value)}
-                required
-                placeholder="Where do you work?"
-              />
-            </div>
-            <div>
-              <label className="block text-gray-700 text-sm font-medium mb-1">
-                Reason for using the tool
-              </label>
-              <textarea
-                className="w-full border border-gray-300 rounded-md p-2 text-gray-700"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                required
-                placeholder="Briefly tell us why you want to use the tool"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors"
-            >
-              Sign Up
-            </button>
-          </form>
-          <div className="mt-4 text-center text-sm text-gray-600">
-            Already have an account?{' '}
-            <Link href="/login" className="text-blue-600 hover:underline">
-              Log In
-            </Link>
-          </div>
+
+          {!loadingData && aggregatedData.length === 0 && (
+            <p className="text-gray-600">No data loaded yet.</p>
+          )}
         </div>
       </main>
     </div>

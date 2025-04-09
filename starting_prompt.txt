@@ -8,7 +8,11 @@ appears in different documents.
 
 I need your help with the following things
 
-1. I am not seeing the name of the jkson file where the LLM response is stored. I need to know where that is
+1. The data that is displayed in /companies/page.tsx I need it to be stored somehow. You can decide if either as  json (which makes sense since we can already see the json raw data) or as you think its more convenient. 
+The reason for this is that this data needs to be also accessed through an API, so the user after having this in the website can also accessed that data through an API for his own applications. 
+In order for the server to know the user requesting the data, I need in the settings page to have an API key for this. 
+2. There might be a lot of json raw files being nicely displayed in companies/page.tsx, so I need the option to press a button next to every number being displayed
+and this automatically will copy to the clipboard the exact url required to access that information through the API.
 
 Here is the file structure of the project
 
