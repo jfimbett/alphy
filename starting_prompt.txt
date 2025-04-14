@@ -8,114 +8,211 @@ appears in different documents.
 
 I need your help with the following things
 
-1. The data that is displayed in /companies/page.tsx I need it to be stored somehow. You can decide if either as  json (which makes sense since we can already see the json raw data) or as you think its more convenient. 
-The reason for this is that this data needs to be also accessed through an API, so the user after having this in the website can also accessed that data through an API for his own applications. 
-In order for the server to know the user requesting the data, I need in the settings page to have an API key for this. 
-2. There might be a lot of json raw files being nicely displayed in companies/page.tsx, so I need the option to press a button next to every number being displayed
-and this automatically will copy to the clipboard the exact url required to access that information through the API.
+1. The API keys are being created but I think they are not being stored. I think there is also a problem with the way the database is structured since im seeing this error
+
+ GET /api/companies?action=manageKeys 500 in 132ms
+ GET /api/sessions 200 in 188ms
+ GET /api/store-heavy-data?sessionId=5 200 in 216ms
+ GET /api/store-heavy-data?sessionId=5 200 in 88ms
+ GET /companies?sessionId=5 200 in 39ms
+API Key Error: error: column "key" does not exist
+    at async GET (app/api/companies/route.ts:17:21)
+  15 |       const userId = 'user_id_from_request'; // Implement proper auth
+  16 |       const client = await pool.connect();
+> 17 |       const result = await client.query(
+     |                     ^
+  18 |         'SELECT key, created_at FROM api_keys WHERE user_id = $1',
+  19 |         [userId]
+  20 |       ); {
+  length: 102,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '8',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3657',
+  routine: 'errorMissingColumn'
+} 
+ GET /api/companies?action=manageKeys 500 in 164ms
+ GET /api/store-heavy-data?sessionId=5 200 in 170ms
+ GET /api/sessions 200 in 175ms
+ GET /api/sessions 200 in 175ms
+ GET /api/store-heavy-data?sessionId=5 200 in 79ms
+ GET /companies?sessionId=4 200 in 40ms
+ GET /api/store-heavy-data?sessionId=4 200 in 143ms
+ GET /settings 200 in 53ms
+ GET /api/api-keys 401 in 35ms
+ GET /api/api-keys?userId=1 401 in 34ms
+ GET /api/api-keys?userId=1 401 in 36ms
+ GET /api/api-keys 401 in 21ms
+
+    
 
 Here is the file structure of the project
 
-|-- favicon.ico
-|-- globals.css
-|-- layout.tsx
-|-- page.tsx
-|-- types.ts
-|-- data-aggregated
+|-- .env.local
+|-- .gitignore
+|-- README.md
+|-- TODO.md
+|-- eslint.config.mjs
+|-- next-env.d.ts
+|-- next.config.ts
+|-- package.json
+|-- pnpm-lock.yaml
+|-- postcss.config.mjs
+|-- prompt.py
+|-- prompt.txt
+|-- starting_prompt.txt
+|-- tailwind.config.ts
+|-- tsconfig.json
+|-- .vscode
+  |-- launch.json
+|-- db
+  |-- reset.sql
+  |-- schema.sql
+  |-- sec_financial_data.sql
+  |-- testdata.sql
+|-- lib
+  |-- modelConfig.ts
+  |-- prompts.ts
+  |-- utils.tsx
+|-- logs
+  |-- debug-responses.jsonl
+  |-- llm-logs.txt
+|-- scripts
+  |-- sync-data.ts
+  |-- tsconfig_local.txt
+|-- types
+  |-- encoder.d.ts
+|-- utils
+  |-- db.tsx
+  |-- localLLMs.tsx
+|-- components
+  |-- AlphyAnimation.tsx
+  |-- AnalysisPreview.tsx
+  |-- ChatMessage.tsx
+  |-- CompanyInfoComponent.tsx
+  |-- CompanySearch.tsx
+  |-- ExtractedTextComponent.tsx
+  |-- FileTree.tsx
+  |-- FileUploader.tsx
+  |-- Footer.tsx
+  |-- Navbar.tsx
+  |-- SummaryContent.tsx
+  |-- TestimonialsSlider.tsx
+  |-- dashboard
+    |-- ChatSection.tsx
+    |-- FileAnalysisProgress.tsx
+    |-- FilePreviewSection.tsx
+    |-- FileUploadArea.tsx
+    |-- LoadSessionModal.tsx
+    |-- ModelSelector.tsx
+    |-- RadioButtons.tsx
+    |-- SaveSessionModal.tsx
+    |-- SessionNameModal.tsx
+  |-- ui
+    |-- card.tsx
+    |-- command.tsx
+    |-- company-facts-page.tsx
+    |-- input.tsx
+    |-- search-form.tsx
+    |-- search-input.tsx
+    |-- search-results.tsx
+    |-- skeleton.tsx
+    |-- spinner.tsx
+|-- public
+  |-- file.svg
+  |-- globe.svg
+  |-- next.svg
+  |-- pdf.worker.mjs
+  |-- vercel.svg
+  |-- window.svg
+  |-- images
+    |-- testimonial-1.jpg
+    |-- testimonial-2.jpg
+    |-- testimonial-3.jpg
+|-- app
+  |-- favicon.ico
+  |-- globals.css
+  |-- layout.tsx
   |-- page.tsx
-|-- companies
-  |-- page.tsx
-|-- settings
-  |-- page.tsx
-|-- login
-  |-- page.tsx
-|-- signup
-  |-- page.tsx
-|-- history
-  |-- page.tsx
-  |-- [sessionId]
+  |-- types.ts
+  |-- companies
     |-- page.tsx
-|-- data
-  |-- page.tsx
-  |-- [cik]
+  |-- data-aggregated
     |-- page.tsx
-|-- dashboard
-  |-- page.tsx
-  |-- useChat.tsx
-  |-- utils
-    |-- utils.tsx
-|-- api
-  |-- company-facts
-    |-- route.tsx
-  |-- account-data
-    |-- route.tsx
-  |-- all-accounts
-    |-- route.tsx
-  |-- financial-data
-    |-- route.tsx
-  |-- countTokens
-    |-- route.tsx
-  |-- llm
-    |-- route.tsx
-  |-- store-heavy-data
-    |-- route.tsx
-  |-- submission-history
-    |-- route.tsx
-  |-- search
-    |-- route.tsx
-  |-- session-file
-    |-- route.tsx
-  |-- test
-    |-- route.tsx
-  |-- files
-    |-- route.tsx
-    |-- [fileId]
-      |-- route.tsx
-  |-- auth
-    |-- signup
-      |-- route.tsx
-    |-- login
-      |-- route.tsx
-  |-- sessions
-    |-- route.tsx
+  |-- settings
+    |-- page.tsx
+  |-- login
+    |-- page.tsx
+  |-- signup
+    |-- page.tsx
+  |-- dashboard
+    |-- page.tsx
+    |-- useChat.tsx
+    |-- utils
+      |-- utils.tsx
+  |-- data
+    |-- page.tsx
+    |-- [cik]
+      |-- page.tsx
+  |-- history
+    |-- page.tsx
     |-- [sessionId]
+      |-- page.tsx
+  |-- api
+    |-- all-accounts
       |-- route.tsx
-  |-- uploads
-    |-- route.tsx
-    |-- [uploadId]
+    |-- account-data
       |-- route.tsx
-|-- AlphyAnimation.tsx
-|-- AnalysisPreview.tsx
-|-- ChatMessage.tsx
-|-- CompanyInfoComponent.tsx
-|-- CompanySearch.tsx
-|-- ExtractedTextComponent.tsx
-|-- FileTree.tsx
-|-- FileUploader.tsx
-|-- Footer.tsx
-|-- Navbar.tsx
-|-- SummaryContent.tsx
-|-- TestimonialsSlider.tsx
-|-- dashboard
-  |-- ChatSection.tsx
-  |-- FileAnalysisProgress.tsx
-  |-- FilePreviewSection.tsx
-  |-- FileUploadArea.tsx
-  |-- LoadSessionModal.tsx
-  |-- ModelSelector.tsx
-  |-- RadioButtons.tsx
-  |-- SaveSessionModal.tsx
-  |-- SessionNameModal.tsx
-|-- ui
-  |-- card.tsx
-  |-- command.tsx
-  |-- company-facts-page.tsx
-  |-- input.tsx
-  |-- search-form.tsx
-  |-- search-input.tsx
-  |-- search-results.tsx
-  |-- skeleton.tsx
-  |-- spinner.tsx
+    |-- company-facts
+      |-- route.tsx
+    |-- countTokens
+      |-- route.tsx
+    |-- financial-data
+      |-- route.tsx
+    |-- api-keys
+      |-- route.ts
+    |-- companies
+      |-- route.ts
+    |-- llm
+      |-- route.tsx
+    |-- session-file
+      |-- route.tsx
+    |-- search
+      |-- route.tsx
+    |-- submission-history
+      |-- route.tsx
+    |-- store-heavy-data
+      |-- route.tsx
+    |-- test
+      |-- route.tsx
+    |-- auth
+      |-- login
+        |-- route.tsx
+      |-- signup
+        |-- route.tsx
+    |-- files
+      |-- route.tsx
+      |-- [fileId]
+        |-- route.tsx
+    |-- sessions
+      |-- route.tsx
+      |-- [sessionId]
+        |-- route.tsx
+    |-- uploads
+      |-- route.tsx
+      |-- [uploadId]
+        |-- route.tsx
 
 
 plus some other standard files in a Next.js project.

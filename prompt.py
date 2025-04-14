@@ -8,8 +8,8 @@ def main():
     
     # List of folders and files relative to the script's directory
     entries = [
-        'lib',
-        'app'
+        'app',
+        'db/schema.sql',
     ]  
 
     # Path to the starting prompt file

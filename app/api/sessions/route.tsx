@@ -1,6 +1,6 @@
 // app/api/sessions/route.tsx
 import { NextResponse } from 'next/server';
-import pool from '../../../utils/db';
+import pool from '@/utils/db';
 // app/api/sessions/route.tsx
 export async function GET(request: Request) {
   const client = await pool.connect();
@@ -41,28 +41,32 @@ export async function GET(request: Request) {
   }
 }
 
-
-
 export async function POST(request: Request) {
   const client = await pool.connect();
-  await client.query('BEGIN');
   try {
     const userId = request.headers.get('x-user-id');
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Validate user exists first
+    const userCheck = await client.query(
+      'SELECT user_id FROM users WHERE user_id = $1',
+      [userId]
+    );
+    if (userCheck.rowCount === 0) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
     const { sessionName } = await request.json();
 
+    const result = await client.query(
+      `INSERT INTO sessions (user_id, session_name)
+       VALUES ($1, $2)
+       RETURNING session_id, created_at`,
+      [userId, sessionName]
+    );
 
-    //columns  session_id | user_id | session_name | created_at | expires_at
-    const result = await client.query(`
-      INSERT INTO sessions (user_id, session_name)
-      VALUES ($1, $2)
-      RETURNING session_id, created_at
-    `, [userId, sessionName]);
-
-   
     const sessionId = result.rows[0].session_id;
 
     await client.query('COMMIT');
@@ -74,7 +78,10 @@ export async function POST(request: Request) {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Session save error:', error);
-    return NextResponse.json({ error: 'Failed to save session' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to save session' }, 
+      { status: 500 }
+    );
   } finally {
     client.release();
   }

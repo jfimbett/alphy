@@ -67,17 +67,26 @@ CREATE TABLE IF NOT EXISTS uploads (
   FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
+-- Create auth table
+CREATE TABLE IF NOT EXISTS auth (
+  user_id UUID PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  full_name VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Create api_keys table
 CREATE TABLE api_keys (
     id SERIAL PRIMARY KEY,
-    user_id UUID REFERENCES auth.users NOT NULL,
+    user_id UUID REFERENCES auth(user_id) NOT NULL,
     provider TEXT NOT NULL,
     decrypted_key TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(user_id, provider)
 );
-
 
 -- Add to your database schema
 CREATE TABLE llm_requests (
@@ -94,5 +103,15 @@ CREATE TABLE llm_requests (
   cache_hit BOOLEAN DEFAULT FALSE
 );
 
+CREATE TABLE api_keys_app (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(user_id),
+  key VARCHAR(64) UNIQUE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX idx_llm_requests_model ON llm_requests(model);
 CREATE INDEX idx_llm_requests_created_at ON llm_requests(created_at);
+
+ALTER TABLE sessions 
+ADD CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(user_id);

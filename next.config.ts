@@ -1,17 +1,12 @@
-//import type { NextConfig } from "next";
+import type { NextConfig } from "next";
 
-const nextConfig = {
+const nextConfig: NextConfig = {
   devIndicators: {
     buildActivity: false,
   },
   experimental: {
-    https: {
-      key: './localhost+2-key.pem',
-      cert: './localhost+2.pem',
-    },
-    turbo: {
-      enabled: false, // Explicitly disable Turbopack
-    },
+    serverComponentsExternalPackages: ['pg'],
+    turbo: {},
   },
   webpack: (config: import('webpack').Configuration) => {
     config.resolve = config.resolve || {};

@@ -1,11 +1,12 @@
 // app/companies/page.tsx
 'use client';
 
-import React, { useEffect, useState } from 'react';  // <-- ensure React is imported
+import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import { useRouter } from 'next/navigation';
 import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
+
 
 interface VariableData {
   value?: number | string;
@@ -28,42 +29,83 @@ interface VariableData {
   };
 }
 
-interface ConsolidatedCompany {
+interface CompanySource {
+  filePath: string;
+  pageNumber?: number;
+  extractionDate: string;
+}
+
+interface CompanyInfo {
   name: string;
-  type: 'company' | 'fund';
-  description: string;
-  variables: Record<string, VariableData>;
-  dates: string[];
-  parent?: string;
-  children?: ConsolidatedCompany[];
+  sector?: string;
+  years?: number[];
+  variables?: Record<string, VariableData>;
+  sources?: CompanySource[];
   ownershipPath: string[];
-  sources: Array<{
-    filePath: string;
-    pageNumber?: number;
-    confidence?: number;
-  }>;
-  // The following are optional properties that might be present for "fund" types or other data structures:
+  subsidiaries?: string[];
   investments?: Array<{
     company: string;
     ownershipPercentage?: number;
   }>;
-  subsidiaries?: string[];
+}
+
+interface ConsolidatedCompany extends CompanyInfo {
+  type: 'company' | 'fund';
+  description: string;
+  dates: string[];
+  parent?: string;
+  children?: ConsolidatedCompany[];
 }
 
 export default function CompaniesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const existingSessionId = searchParams.get('sessionId');
-  
+
+  // Companies & sessions
   const [companies, setCompanies] = useState<ConsolidatedCompany[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedYears, setSelectedYears] = useState<Record<string, number>>({});
   const [expandedOwnership, setExpandedOwnership] = useState<Set<string>>(new Set());
 
-  // New state for raw JSON toggling
+  // Raw JSON toggle
   const [shownJson, setShownJson] = useState<Set<string>>(new Set());
 
+  // -- API Key Management State --
+  const [apiKeys, setApiKeys] = useState<{ key: string; created_at: Date }[]>([]);
+  const [newApiKey, setNewApiKey] = useState<string | null>(null);
+
+  // -- API Key Management Functions --
+  const fetchApiKeys = async () => {
+    try {
+      const response = await fetch('/api/companies?action=manageKeys');
+      if (!response.ok) throw new Error('Failed to fetch API keys');
+      const data = await response.json();
+      setApiKeys(data.keys);
+    } catch (error) {
+      console.error('Error fetching API keys:', error);
+    }
+  };
+
+  const createApiKey = async () => {
+    try {
+      const response = await fetch('/api/companies', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to create API key');
+      const data = await response.json();
+      setNewApiKey(data.key);
+      fetchApiKeys(); // Refresh the list
+    } catch (error) {
+      console.error('Error creating API key:', error);
+    }
+  };
+
+  // Fetch API keys once on mount
+  useEffect(() => {
+    fetchApiKeys();
+  }, []);
+
+  // Fetch sessions
   useEffect(() => {
     const userId = localStorage.getItem('userId');
     if (!userId) return; // Not logged in
@@ -81,6 +123,7 @@ export default function CompaniesPage() {
       });
   }, []);
 
+  // Fetch consolidated companies for a session
   useEffect(() => {
     const fetchConsolidatedData = async () => {
       if (!existingSessionId) {
@@ -107,7 +150,7 @@ export default function CompaniesPage() {
     fetchConsolidatedData();
   }, [existingSessionId]);
 
-  // Add conditional rendering for the "no company data retrieved" message
+  // Handle "no company data retrieved" scenario
   if (searchParams.get('message') === 'noData') {
     return (
       <div className="min-h-screen bg-gray-50 text-gray-600">
@@ -120,7 +163,7 @@ export default function CompaniesPage() {
 
   const getCompanyYears = (company: ConsolidatedCompany): number[] => {
     const years = new Set<number>();
-    Object.values(company.variables).forEach(variable => {
+    Object.values(company.variables ?? {}).forEach(variable => {
       Object.keys(variable).forEach(yearStr => {
         const year = parseInt(yearStr, 10);
         if (!isNaN(year)) years.add(year);
@@ -201,8 +244,7 @@ export default function CompaniesPage() {
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Updated Variable Display Logic */}
-                {Object.entries(company.variables).map(([varName, variableData]) => {
+                {Object.entries(company.variables ?? {}).map(([varName, variableData]) => {
                   let varData: any = null;
                   
                   // Check for year-specific data
@@ -282,6 +324,30 @@ export default function CompaniesPage() {
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
 
+        {/* -- API Key Management Section -- */}
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold mb-4">API Key Management</h1>
+          <button
+            className="bg-blue-500 text-white px-4 py-2 rounded mb-4"
+            onClick={createApiKey}
+          >
+            Generate New API Key
+          </button>
+          {newApiKey && (
+            <div className="bg-green-100 p-4 rounded mb-4">
+              New API Key: {newApiKey}
+            </div>
+          )}
+          <div>
+            {apiKeys.map((key) => (
+              <div key={key.key} className="bg-gray-100 p-2 rounded mb-2">
+                {key.key} (Created: {key.created_at.toString()})
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* -- End API Key Management Section -- */}
+
         {/* Session Selector */}
         <div className="mb-4 text-gray-500">
           <label className="block text-gray-700 font-medium mb-1">Select Session:</label>
@@ -309,17 +375,17 @@ export default function CompaniesPage() {
   );
 }
 
-// OwnershipTree component with investments and subsidiaries display
+// OwnershipTree component
 const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
   <div className="ml-4 border-l-2 border-gray-200 pl-4">
-    {/* Existing ownership path */}
+    {/* Ownership path */}
     {company.ownershipPath?.map((owner, idx) => (
       <div key={idx} className="text-sm text-gray-600">
         {idx === 0 ? 'Root Owner:' : '→'} {owner}
       </div>
     ))}
-    
-    {/* Display investments for funds */}
+
+    {/* Investments for funds */}
     {company.type === 'fund' && (company.investments ?? []).length > 0 && (
       <div className="mt-2">
         <h4 className="font-semibold text-sm mb-1">Investments:</h4>
@@ -336,7 +402,7 @@ const OwnershipTree = ({ company }: { company: ConsolidatedCompany }) => (
       </div>
     )}
 
-    {/* Display subsidiaries */}
+    {/* Subsidiaries */}
     {(company.subsidiaries ?? []).length > 0 && (
       <div className="mt-2">
         <h4 className="font-semibold text-sm mb-1">Subsidiaries:</h4>
