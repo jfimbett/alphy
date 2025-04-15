@@ -56,7 +56,6 @@ There could be multiple companies mentioned, so generate an array entry for each
           {
             "filePath": "some.pdf",
             "pageNumber": 1,
-            "confidence": 0.9
           }
         ]
       },
@@ -76,6 +75,7 @@ Rules:
 - If a "type" of entity (company/fund) is mentioned, store it in the "type" field.
 - If the text includes a short description of the company, store it in the "description" field.
 - Omit fields not found in the text.
+- ALWAYS prioritize returning a complete JSON object, even if it means truncating the output, make sure you close the JSON object properly.
 
 Document Text:
 {documentText}
@@ -97,7 +97,6 @@ export const defaultConsolidationTemplate = `Consolidate company data STRICTLY u
         "sources": [{
           "filePath": "document.pdf",
           "pageNumber": 5,
-          "confidence": 0.95
         }],
         "2018": {
           "value": 456,
@@ -128,6 +127,8 @@ Rules:
 9. For companies, list parent fund in 'parentFund' 
 10. For subsidiaries, list parent company in 'parentCompany'
 11. Maintain full ownership hierarchy in 'ownershipPath'
+12. ALWAYS return a complete JSON object, if your response is too long I prefer to have it cut off than to have an incomplete JSON object.
+13. Do not return any other text, just the JSON object.
 
 RAW DATA: {rawData}
 
@@ -150,24 +151,33 @@ If a year is mentioned (like 2019), do **not** embed that year into the variable
 {text}
 `;
 
-// 2-A) INTERMEDIATE CONSOLIDATION TEMPLATE
+// In lib/prompts.ts
 export const defaultIntermediateConsolidationTemplate = `
-Consolidate the following company data into valid JSON. This is an INTERMEDIATE step
-per document only. DO NOT merge with data from other documents yet.
+Analyze the following company data extracted from different sections of a document.
+Combine duplicate entries and resolve any conflicts in numerical values by preferring 
+more recent information. Always return an array of companies, even if there's only one.
 
-**Input** (rawData):
-  {rawData}
+Input Data:
+{rawData}
 
-**Rules**:
-1. Return a JSON array or an object with a "companies" field that is itself an array. E.g.
-   [{ "name":"...", "type":"company", "variables": {...}, "parent":"...", "ownershipPath":[] }, ...]
-2. Make sure each company's variables are merged if repeated within THIS text. 
-3. Use EXACT numeric or string values you see in the input (unless merging year-based). 
-4. Do not combine data for other documents or references.
-5. Summaries or disclaimers are not needed; just the JSON data.
+Return a JSON array with the consolidated companies. Include all identified companies,
+even if no merging occurred. Format:
+[
+  {
+    "name": "Company Name",
+    "variables": {
+      "variableName": {
+        "2023": {
+          "value": 100000,
+          "currency": "USD",
+          "sources": [
+            {"filePath": "doc.pdf", "pageNumber": 5}
+          ]
+        }
+      }
+    }
+  }
+] 
 
-**Output**:
-\`\`\`json
-[ ...or... { "companies": [ ... ] } ] 
-\`\`\`
-`.trim();
+Ensure to only return the JSON array, without any additional text or explanation.
+`;

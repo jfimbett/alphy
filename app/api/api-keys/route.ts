@@ -45,3 +45,42 @@ export async function POST(request: Request) {
     client.release();
   }
 }
+
+// Verify the DELETE handler is properly using query params
+export async function DELETE(request: Request) {
+  const userId = request.headers.get('x-user-id');
+  const { searchParams } = new URL(request.url);
+  const keyToDelete = searchParams.get('key');
+
+  if (!userId || !keyToDelete) {
+    return NextResponse.json(
+      { error: 'Missing required parameters' }, 
+      { status: 400 }  // More appropriate status than 401
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM api_keys_app WHERE user_id = $1 AND key = $2 RETURNING *',
+      [userId, keyToDelete]
+    );
+
+    if (result.rowCount === 0) {
+      return NextResponse.json(
+        { error: 'Key not found or unauthorized' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('API Key Deletion Error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  } finally {
+    client.release();
+  }
+}

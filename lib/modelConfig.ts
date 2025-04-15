@@ -30,7 +30,7 @@ export type ModelConfig = {
   
   export function getModelConfig(model: string): ModelConfig {
     const defaultConfig: ModelConfig = {
-      contextWindow: 4000,
+      contextWindow: 4096,
       tokenSafetyMargin: 256,
       maxChunkSize: 2000,
       reservedCompletionTokens: 800

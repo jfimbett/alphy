@@ -83,8 +83,10 @@ export default function Dashboard() {
   const [isConsolidating, setIsConsolidating]                       = useState(false);
   const [llmConsolidationDebug, setLlmConsolidationDebug]           = useState<{ prompt: string; response: string }[]>([]);
   const [showDebug, setShowDebug]                                   = useState(false);
+  const [currentChunk, setCurrentChunk]                             = useState(0);
+  const [totalChunks, setTotalChunks]                               = useState(0);
+  const [chunkProgress, setChunkProgress]                           = useState(0);
 
-  
 
   useEffect(() => {
     const userId =
@@ -200,7 +202,12 @@ export default function Dashboard() {
                       setSummaries,
                       setExtractedCompanies,
                       setRawResponses,
-                      currentSessionId || 'temp-${Date.now()}'
+                      currentSessionId || 'temp-${Date.now()}',
+                      (current, total) => {
+                        setCurrentChunk(current);
+                        setTotalChunks(total);
+                        setChunkProgress(Math.round((current / Math.max(total, 1)) * 100));
+                      }
                     );
 
                     // Auto-save session with generated name
@@ -233,6 +240,9 @@ export default function Dashboard() {
                 processingPhase={processingPhase}
                 processedFiles={processedFiles}
                 totalFiles={totalFiles}
+                chunkProgress={chunkProgress}
+                currentChunk={currentChunk}
+                totalChunks={totalChunks}
               />
             </div>
 
@@ -291,12 +301,28 @@ export default function Dashboard() {
 <div className="bg-white p-4 rounded-lg shadow-sm mb-6">
   <div className="flex items-center justify-between mb-4">
     <div>
-      <button
+    <button
         onClick={() => {
+
+        const filteredCompanies = Object.fromEntries(
+        Object.entries(extractedCompanies).filter(([, arr]) => arr.length > 0)
+        ); 
+        setExtractedCompanies(filteredCompanies); 
+
+
+        const hasData = Object.values(filteredCompanies).some(arr => arr.length > 0);
+        if (!hasData) {
+          alert("No extracted company data found. Please analyze files first.");
+          return;
+        }
+
+          // 2) Check if session is saved
           if (!currentSessionId) {
             alert('Please save the session first');
             return;
           }
+
+          // 3) Proceed with consolidation logic
           setErrorFiles([]);
           handleConsolidateCompanies(
             currentSessionId,
@@ -378,7 +404,6 @@ export default function Dashboard() {
           {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
         </button>
 
-        {/* Debug Info */}
         {showDebug && (
           <div className="bg-white p-4 rounded shadow mb-6 max-h-80 overflow-y-auto text-gray-600">
             <h3 className="text-lg font-semibold mb-2">Extraction Debug Info</h3>
@@ -393,26 +418,38 @@ export default function Dashboard() {
                 </p>
               </div>
             ))}
+
             {llmConsolidationDebug.length > 0 && (
               <div className="mt-4 border-t pt-2">
-                <h3 className="text-lg font-semibold mb-2">
-                  Consolidation Debug Info
-                </h3>
+                <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
                 {llmConsolidationDebug.map((debug, index) => (
                   <div key={index} className="mb-4 border-b pb-2">
                     <p className="text-sm text-gray-600">
                       <span className="font-semibold">Prompt:</span> {debug.prompt}
                     </p>
                     <p className="text-sm text-gray-600">
-                      <span className="font-semibold">Response:</span>{' '}
-                      {debug.response}
+                      <span className="font-semibold">Response:</span> {debug.response}
                     </p>
                   </div>
                 ))}
               </div>
             )}
+
+            {/* Intermediate Consolidation Results */}
+            <div className="mt-4 border-t pt-2">
+              <h3 className="text-lg font-semibold mb-2">Intermediate Consolidation Results</h3>
+              {Object.entries(extractedCompanies).map(([file, companies]) => (
+                <div key={file} className="mb-4">
+                  <p className="font-medium">{file}</p>
+                  <pre className="text-xs">
+                    {JSON.stringify(companies, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
           </div>
         )}
+
 
         {/* Save Modal */}
         <SaveModal

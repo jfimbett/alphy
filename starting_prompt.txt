@@ -8,54 +8,9 @@ appears in different documents.
 
 I need your help with the following things
 
-1. The API keys are being created but I think they are not being stored. I think there is also a problem with the way the database is structured since im seeing this error
-
- GET /api/companies?action=manageKeys 500 in 132ms
- GET /api/sessions 200 in 188ms
- GET /api/store-heavy-data?sessionId=5 200 in 216ms
- GET /api/store-heavy-data?sessionId=5 200 in 88ms
- GET /companies?sessionId=5 200 in 39ms
-API Key Error: error: column "key" does not exist
-    at async GET (app/api/companies/route.ts:17:21)
-  15 |       const userId = 'user_id_from_request'; // Implement proper auth
-  16 |       const client = await pool.connect();
-> 17 |       const result = await client.query(
-     |                     ^
-  18 |         'SELECT key, created_at FROM api_keys WHERE user_id = $1',
-  19 |         [userId]
-  20 |       ); {
-  length: 102,
-  severity: 'ERROR',
-  code: '42703',
-  detail: undefined,
-  hint: undefined,
-  position: '8',
-  internalPosition: undefined,
-  internalQuery: undefined,
-  where: undefined,
-  schema: undefined,
-  table: undefined,
-  column: undefined,
-  dataType: undefined,
-  constraint: undefined,
-  file: 'parse_relation.c',
-  line: '3657',
-  routine: 'errorMissingColumn'
-} 
- GET /api/companies?action=manageKeys 500 in 164ms
- GET /api/store-heavy-data?sessionId=5 200 in 170ms
- GET /api/sessions 200 in 175ms
- GET /api/sessions 200 in 175ms
- GET /api/store-heavy-data?sessionId=5 200 in 79ms
- GET /companies?sessionId=4 200 in 40ms
- GET /api/store-heavy-data?sessionId=4 200 in 143ms
- GET /settings 200 in 53ms
- GET /api/api-keys 401 in 35ms
- GET /api/api-keys?userId=1 401 in 34ms
- GET /api/api-keys?userId=1 401 in 36ms
- GET /api/api-keys 401 in 21ms
-
-    
+1. I am not being able to delete application access  keys from the settings page, I think there is a confussion about the parameters that are being sent. 
+  
+ 
 
 Here is the file structure of the project
 

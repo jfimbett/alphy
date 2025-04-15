@@ -8,8 +8,8 @@ def main():
     
     # List of folders and files relative to the script's directory
     entries = [
-        'app',
-        'db/schema.sql',
+        'app/api/api-keys',
+        'app/settings',
     ]  
 
     # Path to the starting prompt file

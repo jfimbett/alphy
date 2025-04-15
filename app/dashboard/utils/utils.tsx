@@ -68,7 +68,7 @@ async function retrieveInfoFromTextsRefactored(
 
   // 1) Get model config for chunking
   const modelConfig = getModelConfig(infoRetrievalModel);
-  const MAX_TOKENS = modelConfig.contextWindow;
+  const MAX_TOKENS = modelConfig.contextWindow - modelConfig.reservedCompletionTokens - 1000; 
 
   // 2) Process each file's extracted text
   for (const [fullPath, text] of Object.entries(extractedTexts)) {
@@ -85,7 +85,7 @@ async function retrieveInfoFromTextsRefactored(
 
       const chunks = splitTextIntoChunks(
         text,
-        MAX_TOKENS - baseTokens - modelConfig.reservedCompletionTokens,
+        MAX_TOKENS - baseTokens,
         modelConfig.maxChunkSize
       );
 
@@ -124,26 +124,47 @@ async function retrieveInfoFromTextsRefactored(
           combinedResponseDebug += `\n[CHUNK ${i + 1} RESPONSE]\n${rawChunkResponse}\n`;
 
           // Attempt to parse the JSON the LLM returned
-          const cleaned = rawChunkResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+          const cleaned = rawChunkResponse
+            .replace(/```json/g, '')
+            .replace(/```/g, '')
+            .trim();
+
           try {
-            const parsed = JSON.parse(cleaned);
+            // Attempt to fix incomplete JSON
+            const fixed = fixIncompleteJson(cleaned);
+
+            const parsed = JSON.parse(fixed);
             let chunkCompanies: CompanyInfo[] = [];
+
+            // Handle array responses
             if (Array.isArray(parsed)) {
               chunkCompanies = parsed;
-            } else if (parsed?.companies && Array.isArray(parsed.companies)) {
+            }
+            // Handle object with companies array
+            else if (parsed?.companies && Array.isArray(parsed.companies)) {
               chunkCompanies = parsed.companies;
-            } else {
-              console.error('Invalid response structure for', fullPath, parsed);
-              throw new Error('Invalid response structure from LLM');
+            }
+            // Handle single company object
+            else if (parsed?.name) {
+              // Check for required company field
+              chunkCompanies = [parsed];
             }
 
             chunkCompanies = chunkCompanies.map(company => ({
               ...company,
               variables: company.variables || {},
-              sources: company.sources || []
+              sources:
+                company.sources?.map(s => ({
+                  filePath: s.filePath,
+                  pageNumber: s.pageNumber || undefined,
+                  extractionDate: new Date().toISOString()
+                })) || []
             }));
-            // Merge them with what we have so far
-            combinedCompanyData = mergeConsolidatedCompanies([combinedCompanyData, chunkCompanies]);
+
+            combinedCompanyData = mergeConsolidatedCompanies([
+              combinedCompanyData,
+              chunkCompanies
+            ]);
           } catch (parseErr) {
             console.error(`Failed to parse chunk JSON for ${fullPath}:`, parseErr);
           }
@@ -181,6 +202,7 @@ async function retrieveInfoFromTextsRefactored(
   // 6) Return final map: fullPath -> arrayOfCompanies
   return allExtracted;
 }
+
 
 // ==================================================================
 // 3) Utility & Helper Functions
@@ -410,6 +432,7 @@ export const processFolder = async (
 
 /**
  * Splits text into chunks to accommodate token/context window constraints.
+ * This is the **updated** function you provided.
  * @param text - The text to chunk.
  * @param maxTokens - Maximum token count for a chunk.
  * @param maxChunkSize - Maximum character length for a chunk.
@@ -421,64 +444,57 @@ function splitTextIntoChunks(
   maxChunkSize: number
 ): string[] {
   const chunks: string[] = [];
-  let currentChunk = '';
-  let currentTokens = 0;
+  const paragraphs = text.split(/\n\s*\n/); // Split by paragraphs
+  let currentChunk: string[] = [];
+  let currentTokenCount = 0;
 
-  // First split by large headings or sections
-  const sections = text.split(/(\n\s*[A-Z][A-Z0-9 ]{10,}\n)/g);
-
-  let buffer = '';
-  sections.forEach((section, index) => {
-    if (index % 2 === 1) {
-      // It's a heading
-      buffer += section;
-    } else {
-      const sectionWithHeading = buffer + section;
-      buffer = '';
-
-      // Then split by paragraphs within each section
-      const paragraphs = sectionWithHeading.split('\n\n');
-
-      paragraphs.forEach((para) => {
-        const paraTokens = estimateTokens(para);
-
-        if (paraTokens > maxTokens) {
-          // Handle large paragraphs with sentence splitting
-          const sentences = para.split(/[.!?]\s+/g);
-          sentences.forEach((sentence) => {
-            const sentenceTokens = estimateTokens(sentence);
-            if (
-              currentTokens + sentenceTokens > maxTokens ||
-              currentChunk.length + sentence.length > maxChunkSize
-            ) {
-              chunks.push(currentChunk.trim());
-              currentChunk = '';
-              currentTokens = 0;
-            }
-            currentChunk += sentence + '. ';
-            currentTokens += sentenceTokens;
-          });
-        } else {
-          if (
-            currentTokens + paraTokens > maxTokens ||
-            currentChunk.length + para.length > maxChunkSize
-          ) {
-            chunks.push(currentChunk.trim());
-            currentChunk = '';
-            currentTokens = 0;
-          }
-          currentChunk += para + '\n\n';
-          currentTokens += paraTokens;
-        }
+  paragraphs.forEach(para => {
+    const paraTokens = estimateTokens(para);
+    
+    // If paragraph itself exceeds max tokens, split sentences
+    if (paraTokens > maxTokens) {
+      const sentences = para.split(/(?<=[.!?])\s+/);
+      sentences.forEach(sentence => {
+        const sentenceTokens = estimateTokens(sentence);
+        handleSentence(sentence, sentenceTokens);
       });
+    } else {
+      handleParagraph(para, paraTokens);
     }
   });
 
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk.trim());
+  // Add remaining content
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk.join('\n\n'));
   }
 
   return chunks;
+
+  function handleSentence(sentence: string, tokens: number) {
+    if (
+      currentTokenCount + tokens > maxTokens ||
+      currentChunk.join('\n\n').length + sentence.length > maxChunkSize
+    ) {
+      chunks.push(currentChunk.join('\n\n'));
+      currentChunk = [];
+      currentTokenCount = 0;
+    }
+    currentChunk.push(sentence);
+    currentTokenCount += tokens;
+  }
+
+  function handleParagraph(para: string, tokens: number) {
+    if (
+      currentTokenCount + tokens > maxTokens ||
+      currentChunk.join('\n\n').length + para.length > maxChunkSize
+    ) {
+      chunks.push(currentChunk.join('\n\n'));
+      currentChunk = [];
+      currentTokenCount = 0;
+    }
+    currentChunk.push(para);
+    currentTokenCount += tokens;
+  }
 }
 
 /**
@@ -772,6 +788,7 @@ async function retrieveInfoFromTexts(
     React.SetStateAction<Record<string, { prompt: string; response: string }>>
   >,
   logId: string,
+  onChunkProgress?: (current: number, total: number) => void
 ) {
   setProcessingPhase('extracting_companies');
   setProgress(0);
@@ -798,6 +815,8 @@ async function retrieveInfoFromTexts(
         modelConfig.maxChunkSize
       );
 
+      if (onChunkProgress) onChunkProgress(0, chunks.length);
+
       let allCompanies: CompanyInfo[] = [];
       let combinedPromptDebug = '';
       let combinedResponseDebug = '';
@@ -806,6 +825,7 @@ async function retrieveInfoFromTexts(
         const chunk = chunks[i];
         const chunkPrompt = template.replace('{documentText}', chunk);
         combinedPromptDebug += `\n\n[CHUNK ${i + 1} PROMPT]\n${chunkPrompt}\n`;
+
         const res = await fetch('/api/llm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -817,31 +837,50 @@ async function retrieveInfoFromTexts(
             logId: logId, // Pass the logId for tracking
           })
         });
+
         let chunkResponse = '';
         if (res.ok) {
           const data = await res.json();
           chunkResponse = data.content || '';
+
           // Append chunk response text to the debug
           combinedResponseDebug += `\n[CHUNK ${i + 1} RESPONSE]\n${chunkResponse}\n`;
+
           // Attempt to parse as JSON
-          const cleaned = chunkResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+          let cleaned = ""
           try {
+
+            cleaned = chunkResponse
+              .replace(/```json/g, '')
+              .replace(/```/g, '')
+              .trim();
+
+            cleaned = cleaned.replace(/\n/g, '').trim();
+            // Attempt to fix incomplete JSON
+            cleaned = fixIncompleteJson(cleaned);
             const parsed = JSON.parse(cleaned);
+
             let companies = Array.isArray(parsed) ? parsed : parsed?.companies || [];
             // Map 'company_name' to 'name' if present
             companies = companies.map((company: any) => ({
               ...company,
               name: company.company_name || company.name
             }));
+
             allCompanies = mergeConsolidatedCompanies([allCompanies, companies]);
           } catch (parseErr) {
-            console.error(`Failed to parse chunk companies for ${fullPath}:`, parseErr);
+            //print the problematic string
+            console.error(cleaned)
+            
+
           }
         } else {
           const errText = await res.text();
           console.error(`LLM call failed for chunk ${i + 1}: ${errText}`);
           combinedResponseDebug += `\n[CHUNK ${i + 1} ERROR]\n${errText}\n`;
         }
+
+        if (onChunkProgress) onChunkProgress(i + 1, chunks.length);
       }
 
       // Finally store results for this file
@@ -865,6 +904,89 @@ async function retrieveInfoFromTexts(
     count++;
     setProcessedFiles(count);
     setProgress(Math.round((count / total) * 100));
+  }
+}
+/**
+ * Attempts to fix incomplete JSON strings by properly closing open structures.
+ * @param incompleteJson The potentially incomplete JSON string
+ * @returns A properly formatted JSON string
+ * @throws Error if the JSON cannot be parsed even after attempted fixes
+ */
+export function fixIncompleteJson(incompleteJson: string): string {
+  let jsonString = incompleteJson.trim();
+  let stack: string[] = [];
+  let i = 0;
+
+  // First, try to parse the JSON as-is
+  try {
+    JSON.parse(jsonString);
+    return jsonString;
+  } catch (initialError) {
+    // If it fails, proceed with our fixing logic
+  }
+
+  // Analyze the string to determine what might be missing
+  for (i = 0; i < jsonString.length; i++) {
+    const char = jsonString[i];
+    const prevChar = i > 0 ? jsonString[i - 1] : null;
+
+    // Skip escaped characters
+    if (char === '\\' && prevChar !== '\\') {
+      i++; // Skip the next character
+      continue;
+    }
+
+    if (char === '"' && prevChar !== '\\') {
+      // Skip strings
+      while (i < jsonString.length) {
+        i++;
+        if (jsonString[i] === '"' && jsonString[i - 1] !== '\\') {
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (char === '{' || char === '[') {
+      stack.push(char === '{' ? '}' : ']');
+    } else if (char === '}' || char === ']') {
+      if (stack.length > 0 && stack[stack.length - 1] === char) {
+        stack.pop();
+      }
+    }
+  }
+
+  // Add missing closing brackets/braces
+  while (stack.length > 0) {
+    jsonString += stack.pop();
+  }
+
+  // Try to parse the fixed JSON
+  try {
+    JSON.parse(jsonString);
+    return jsonString;
+  } catch (finalError) {
+    // If still failing, try some common fixes
+    try {
+      // Case 1: Missing closing quote for last property value
+      const lastQuoteIndex = jsonString.lastIndexOf('"');
+      if (lastQuoteIndex > 0 && 
+          jsonString[lastQuoteIndex - 1] !== '\\' && 
+          jsonString.substring(lastQuoteIndex + 1).match(/^\s*[\],}]/)) {
+        const fixedJson = jsonString.substring(0, lastQuoteIndex + 1) + 
+                         '"' + 
+                         jsonString.substring(lastQuoteIndex + 1);
+        JSON.parse(fixedJson);
+        return fixedJson;
+      }
+
+      // Case 2: Missing comma between array/object elements
+      const fixedWithCommas = jsonString.replace(/([}\]"])\s*(["{[])/g, '$1,$2');
+      JSON.parse(fixedWithCommas);
+      return fixedWithCommas;
+    } catch (nestedError) {
+      throw new Error(`Unable to fix JSON: ${(nestedError as Error).message}\nOriginal JSON: ${incompleteJson}`);
+    }
   }
 }
 
@@ -897,6 +1019,7 @@ export async function analyzeFiles(
     React.SetStateAction<Record<string, { prompt: string; response: string }>>
   >,
   logId:string,
+  onChunkProgress?: (current: number, total: number) => void
 ) {
   try {
     setIsAnalyzing(true);
@@ -939,7 +1062,8 @@ export async function analyzeFiles(
         setProcessedFiles,
         setExtractedCompanies,
         setRawResponses,
-        logId
+        logId,
+        onChunkProgress
       );
     }
 
@@ -999,6 +1123,7 @@ export const handleConsolidateCompanies = async (
     const perFileConsolidations: CompanyInfo[][] = [];
     // Initialize progress
     onProgress?.(0, total, '');
+
     for (const filePath of allFilePaths) {
       try {
         const companiesForFile = extractedCompanies[filePath] || [];
@@ -1031,14 +1156,35 @@ export const handleConsolidateCompanies = async (
         const { content } = await res.json();
         const cleaned = content.replace(/```json/gi, '').replace(/```/g, '').trim();
 
+        // In utils.tsx - handleConsolidateCompanies function
+        // Update the response parsing for intermediate consolidation:
         let fileConsolidated: CompanyInfo[] = [];
         try {
+         
           const parsed = JSON.parse(cleaned);
-          if (parsed && Array.isArray(parsed.companies)) {
-            fileConsolidated = parsed.companies;
-          } else if (Array.isArray(parsed)) {
+
+          // Handle array
+          if (Array.isArray(parsed)) {
             fileConsolidated = parsed;
           }
+          // Handle object with "companies" array
+          else if (parsed?.companies && Array.isArray(parsed.companies)) {
+            fileConsolidated = parsed.companies;
+          }
+          // Handle single company
+          else if (parsed?.name) {
+            fileConsolidated = [parsed];
+          }
+
+          // Ensure sources are properly formatted
+          fileConsolidated = fileConsolidated.map(company => ({
+            ...company,
+            sources: company.sources?.map(s => ({
+              filePath: s.filePath,
+              pageNumber: s.pageNumber || undefined,
+              extractionDate: new Date().toISOString(),
+            })) || [],
+          }));
         } catch (parseErr) {
           console.error(`File-level parse error [${filePath}]:`, parseErr);
         }
@@ -1193,6 +1339,7 @@ export const handleConsolidateCompanies = async (
     setIsConsolidating(false);
   }
 };
+
 
 // ==================================================================
 // 6) Additional Utilities

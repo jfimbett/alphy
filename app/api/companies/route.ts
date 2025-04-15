@@ -2,20 +2,22 @@ import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
 import crypto from 'crypto';
 
-// Existing company data endpoint
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const apiKey = request.headers.get('x-api-key');
-  const companyName = searchParams.get('name');
-  const sessionId = searchParams.get('sessionId');
+  const action = searchParams.get('action');
+  const userId = request.headers.get('x-user-id');
 
-  // Handle API key management requests
-  if (searchParams.get('action') === 'manageKeys') {
+  // Handle API key management
+  if (action === 'manageKeys') {
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     try {
-      const userId = 'user_id_from_request'; // Implement proper auth
       const client = await pool.connect();
       const result = await client.query(
-        'SELECT key, created_at FROM api_keys WHERE user_id = $1',
+        'SELECT key, created_at FROM api_keys_app WHERE user_id = $1', // Changed table name
         [userId]
       );
       client.release();
@@ -27,6 +29,9 @@ export async function GET(request: Request) {
   }
 
   // Existing company data logic
+  const companyName = searchParams.get('name');
+  const sessionId = searchParams.get('sessionId');
+
   if (!apiKey) {
     return NextResponse.json({ error: 'API key required' }, { status: 401 });
   }
@@ -35,10 +40,10 @@ export async function GET(request: Request) {
   try {
     client = await pool.connect();
     const keyCheck = await client.query(
-      'SELECT user_id FROM api_keys WHERE key = $1',
+      'SELECT user_id FROM api_keys_app WHERE key = $1', // Changed table name
       [apiKey]
     );
-    
+
     if (keyCheck.rowCount === 0) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
     }
@@ -70,15 +75,18 @@ export async function GET(request: Request) {
   }
 }
 
-// New POST endpoint for creating API keys
 export async function POST(request: Request) {
+  const userId = request.headers.get('x-user-id');
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
-    const userId = 'user_id_from_request'; // Implement proper auth
     const client = await pool.connect();
     const apiKey = crypto.randomBytes(32).toString('hex');
     
     await client.query(
-      'INSERT INTO api_keys (user_id, key) VALUES ($1, $2)',
+      'INSERT INTO api_keys_app (user_id, key) VALUES ($1, $2)', // Changed table name
       [userId, apiKey]
     );
     

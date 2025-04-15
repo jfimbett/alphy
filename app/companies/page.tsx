@@ -324,30 +324,6 @@ export default function CompaniesPage() {
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-8">
 
-        {/* -- API Key Management Section -- */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold mb-4">API Key Management</h1>
-          <button
-            className="bg-blue-500 text-white px-4 py-2 rounded mb-4"
-            onClick={createApiKey}
-          >
-            Generate New API Key
-          </button>
-          {newApiKey && (
-            <div className="bg-green-100 p-4 rounded mb-4">
-              New API Key: {newApiKey}
-            </div>
-          )}
-          <div>
-            {apiKeys.map((key) => (
-              <div key={key.key} className="bg-gray-100 p-2 rounded mb-2">
-                {key.key} (Created: {key.created_at.toString()})
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* -- End API Key Management Section -- */}
-
         {/* Session Selector */}
         <div className="mb-4 text-gray-500">
           <label className="block text-gray-700 font-medium mb-1">Select Session:</label>

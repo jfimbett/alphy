@@ -23,6 +23,9 @@ type FileAnalysisButtonsProps = {
   processingPhase: string;
   processedFiles: number;
   totalFiles: number;
+  chunkProgress: number;
+  currentChunk: number;
+  totalChunks: number;
 };
 
 const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
@@ -43,6 +46,9 @@ const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
   processingPhase,
   processedFiles,
   totalFiles,
+  chunkProgress,
+  currentChunk,
+  totalChunks,
 }) => {
   if (fileTree.length === 0) return null;
 
@@ -99,8 +105,27 @@ const FileAnalysisButtons: React.FC<FileAnalysisButtonsProps> = ({
               {processingPhase === "extracting_companies" &&
                 `Extracting company data: ${processedFiles}/${totalFiles} (${progress}%)`}
             </span>
+            {totalChunks > 0 && (
+        <div>
+          <div className="flex justify-between mb-1 text-sm font-medium">
+            
+            <span>
+              Spliting Chunks ({currentChunk}/{totalChunks}) 
+            </span>
+            <span> {chunkProgress}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2.5">
+            <div
+              className="bg-green-600 h-2.5 rounded-full"
+              style={{ width: `${chunkProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
           </div>
         )}
+        
+      
       </div>
     </div>
   );
