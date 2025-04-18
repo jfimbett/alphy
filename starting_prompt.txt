@@ -8,9 +8,104 @@ appears in different documents.
 
 I need your help with the following things
 
-1. I am not being able to delete application access  keys from the settings page, I think there is a confussion about the parameters that are being sent. 
-  
- 
+1. The consolidation is not working for some files, eventhough the json response clearly shows that there is information. 
+For example, when I analyze a file in companies/page.tsx I see this information in the raw json
+CHUNK 1 RESPONSE]
+[]
+
+[CHUNK 2 RESPONSE]
+{
+  "companies": [
+    {
+      "name": "REMARKABLE HOLDING AS",
+      "type": "company",
+      "variables": {
+        "operating_income": {
+          "2020": {
+            "value": "-552 285",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "-777 521",
+            "currency": "NOK"
+          }
+        },
+        "net_finance": {
+          "2020": {
+            "value": "690 065",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "616 587",
+            "currency": "NOK"
+          }
+        },
+        "ordinary_result_before_tax": {
+          "2020": {
+            "value": "137 780",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "-160 934",
+            "currency": "NOK"
+          }
+        },
+        "ordinary_result_after_tax": {
+          "2020": {
+            "value": "107 469",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "-125 529",
+            "currency": "NOK"
+          }
+        },
+        "annual_result": {
+          "2020": {
+            "value": "107 469",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "-125 529",
+            "currency": "NOK"
+          }
+        },
+        "total_assets": {
+          "2020": {
+            "value": "205 722 164",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "191 797 845",
+            "currency": "NOK"
+          }
+        },
+        "total_equity": {
+          "2020": {
+            "value": "205 548 733",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "191 253 920",
+            "currency": "NOK"
+          }
+        },
+        "total_liabilities": {
+          "2020": {
+            "value": "173 431",
+            "currency": "NOK"
+          },
+          "2019": {
+            "value": "543 925",
+            "currency": "NOK"
+          }
+        }
+      }
+    }
+  ]
+}
+
+but I see no vriables being displayed.
 
 Here is the file structure of the project
 
@@ -172,8 +267,7 @@ Here is the file structure of the project
 
 plus some other standard files in a Next.js project.
 
-Always return the code in a clear manner, commented, and using best practices. If you are not returning the entire code of 
-the file you need to be extremely clear where I should incorporate that code. 
+Always return the code in a clear manner, commented, and using best practices. If you cannot return the entire code at least return the entire function where the code is being modified.
 
 Here are the files you need 
 

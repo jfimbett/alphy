@@ -68,6 +68,9 @@ importers:
       gpt-tokenizer:
         specifier: ^2.8.1
         version: 2.8.1
+      jsonrepair:
+        specifier: ^3.12.0
+        version: 3.12.0
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -2017,6 +2020,10 @@ packages:
 
   json5@1.0.2:
     resolution: {integrity: sha512-g1MWMLBiz8FKi1e4w0UyVL3w+iJceWAFBAaBnnGKOpNa5f8TLktkbre1+s6oICydWAm+HRUGTmI+//xv2hvXYA==}
+    hasBin: true
+
+  jsonrepair@3.12.0:
+    resolution: {integrity: sha512-SWfjz8SuQ0wZjwsxtSJ3Zy8vvLg6aO/kxcp9TWNPGwJKgTZVfhNEQBMk/vPOpYCDFWRxD6QWuI6IHR1t615f0w==}
     hasBin: true
 
   jsx-ast-utils@3.3.5:
@@ -5347,6 +5354,8 @@ snapshots:
   json5@1.0.2:
     dependencies:
       minimist: 1.2.8
+
+  jsonrepair@3.12.0: {}
 
   jsx-ast-utils@3.3.5:
     dependencies:

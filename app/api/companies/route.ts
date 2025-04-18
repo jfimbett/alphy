@@ -1,15 +1,25 @@
+/**
+ * File: app/api/companies/route.ts
+ * --------------------------------
+ * This route handles:
+ *   - GET /api/companies?action=managekeys (retrieves user’s API keys)
+ *   - GET /api/companies?name=...&sessionId=...&apiKey=... (fetches a company’s data)
+ *   - POST /api/companies (creates a new API key)
+ */
+
 import { NextResponse } from 'next/server';
 import pool from '@/utils/db';
 import crypto from 'crypto';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const apiKey = request.headers.get('x-api-key');
   const action = searchParams.get('action');
   const userId = request.headers.get('x-user-id');
 
-  // Handle API key management
-  if (action === 'manageKeys') {
+  // ---------------------------------------------------------------
+  // 1. Handle GET /api/companies?action=managekeys  (list user’s API keys)
+  // ---------------------------------------------------------------
+  if (action?.toLowerCase() === 'managekeys') {
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -17,7 +27,7 @@ export async function GET(request: Request) {
     try {
       const client = await pool.connect();
       const result = await client.query(
-        'SELECT key, created_at FROM api_keys_app WHERE user_id = $1', // Changed table name
+        'SELECT key, created_at FROM api_keys_app WHERE user_id = $1',
         [userId]
       );
       client.release();
@@ -28,9 +38,14 @@ export async function GET(request: Request) {
     }
   }
 
-  // Existing company data logic
+  // ---------------------------------------------------------------
+  // 2. Handle GET /api/companies?name=...&sessionId=...&apiKey=...
+  //    (fetch a single company’s consolidated data)
+  // ---------------------------------------------------------------
   const companyName = searchParams.get('name');
   const sessionId = searchParams.get('sessionId');
+  // Accept both header and query param for the API key
+  const apiKey = request.headers.get('x-api-key') || searchParams.get('apiKey');
 
   if (!apiKey) {
     return NextResponse.json({ error: 'API key required' }, { status: 401 });
@@ -40,7 +55,7 @@ export async function GET(request: Request) {
   try {
     client = await pool.connect();
     const keyCheck = await client.query(
-      'SELECT user_id FROM api_keys_app WHERE key = $1', // Changed table name
+      'SELECT user_id FROM api_keys_app WHERE key = $1',
       [apiKey]
     );
 
@@ -48,8 +63,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
     }
 
+    // Perform internal fetch against our own API store endpoint
+    const origin = new URL(request.url).origin;
     const heavyRes = await fetch(
-      `${process.env.NEXTAUTH_URL}/api/store-heavy-data?sessionId=${sessionId}`
+      `${origin}/api/store-heavy-data?sessionId=${sessionId}`
     );
     if (!heavyRes.ok) {
       return NextResponse.json({ error: 'Session data not found' }, { status: 404 });
@@ -83,10 +100,11 @@ export async function POST(request: Request) {
 
   try {
     const client = await pool.connect();
+    // Generate a new API key
     const apiKey = crypto.randomBytes(32).toString('hex');
     
     await client.query(
-      'INSERT INTO api_keys_app (user_id, key) VALUES ($1, $2)', // Changed table name
+      'INSERT INTO api_keys_app (user_id, key) VALUES ($1, $2)',
       [userId, apiKey]
     );
     

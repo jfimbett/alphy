@@ -33,6 +33,8 @@ export default function LoginPage() {
       localStorage.setItem('loggedIn', 'true');
       localStorage.setItem('userEmail', data.user.email);
       localStorage.setItem('userId', String(data.user.user_id));
+      // Record login time for session expiration
+      localStorage.setItem('loginTimestamp', Date.now().toString());
       router.push('/dashboard');
     } catch (err) {
       console.error('Login Error:', err);

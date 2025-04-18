@@ -8,7 +8,7 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import * as XLSX from 'xlsx';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { Dispatch, SetStateAction } from 'react';
-
+import { jsonrepair } from 'jsonrepair';
 // --- Internal (Local) Imports ---
 import { CompanyInfo, ConsolidatedCompany } from '@/app/types';
 import {
@@ -20,6 +20,7 @@ import {
 } from '@/lib/prompts';
 import { FileNode } from '@/components/FileTree';
 import { getModelConfig } from '@/lib/modelConfig';
+import { debug } from 'console';
 
 // ==================================================================
 // 2) Types & Interfaces
@@ -73,14 +74,17 @@ async function retrieveInfoFromTextsRefactored(
   // 2) Process each file's extracted text
   for (const [fullPath, text] of Object.entries(extractedTexts)) {
     try {
-      // Grab (or fallback) to your extraction template
-      const template =
+      // Grab (or fallback) to your extraction template, and inject document path
+      const rawTemplate =
         typeof window !== 'undefined'
           ? localStorage.getItem('extractionTemplate') || defaultExtractionTemplate
           : defaultExtractionTemplate;
-
-      // We chunk the text so we can pass each chunk to LLM without exceeding tokens
-      const basePrompt = template.replace('{documentText}', '');
+      const templateWithPath = rawTemplate.replace(
+        '{documentPath}',
+        fullPath
+      );
+      // Chunking prompt without text for token estimation
+      const basePrompt = templateWithPath.replace('{documentText}', '');
       const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
 
       const chunks = splitTextIntoChunks(
@@ -99,7 +103,11 @@ async function retrieveInfoFromTextsRefactored(
       // 3) LLM calls for each chunk
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        const chunkPrompt = template.replace('{documentText}', chunk);
+        // Inject both document path and the current text chunk
+        const chunkPrompt = templateWithPath.replace(
+          '{documentText}',
+          chunk
+        );
 
         // For debugging, store the chunk prompt
         combinedPromptDebug += `\n\n[CHUNK ${i + 1} PROMPT]\n${chunkPrompt}\n`;
@@ -430,13 +438,11 @@ export const processFolder = async (
   }
 };
 
+// File: app/dashboard/utils/utils.tsx
+
 /**
  * Splits text into chunks to accommodate token/context window constraints.
- * This is the **updated** function you provided.
- * @param text - The text to chunk.
- * @param maxTokens - Maximum token count for a chunk.
- * @param maxChunkSize - Maximum character length for a chunk.
- * @returns An array of text chunks.
+ * Now with a fallback to split any oversized sentence/paragraph by character length.
  */
 function splitTextIntoChunks(
   text: string,
@@ -444,28 +450,39 @@ function splitTextIntoChunks(
   maxChunkSize: number
 ): string[] {
   const chunks: string[] = [];
-  const paragraphs = text.split(/\n\s*\n/); // Split by paragraphs
+  const paragraphs = text.split(/\n\s*\n/); // Split by blank lines
   let currentChunk: string[] = [];
   let currentTokenCount = 0;
 
-  paragraphs.forEach(para => {
+  paragraphs.forEach((para) => {
     const paraTokens = estimateTokens(para);
-    
-    // If paragraph itself exceeds max tokens, split sentences
+
     if (paraTokens > maxTokens) {
+      // First try splitting on sentence boundaries
       const sentences = para.split(/(?<=[.!?])\s+/);
-      sentences.forEach(sentence => {
+
+      sentences.forEach((sentence) => {
         const sentenceTokens = estimateTokens(sentence);
-        handleSentence(sentence, sentenceTokens);
+
+        if (sentenceTokens > maxTokens) {
+          // Fallback: break this sentence into fixed‑size slices
+          for (let i = 0; i < sentence.length; i += maxChunkSize) {
+            const part = sentence.slice(i, i + maxChunkSize);
+            const partTokens = estimateTokens(part);
+            handleParagraph(part, partTokens);
+          }
+        } else {
+          handleSentence(sentence, sentenceTokens);
+        }
       });
     } else {
       handleParagraph(para, paraTokens);
     }
   });
 
-  // Add remaining content
+  // Push any remaining text
   if (currentChunk.length > 0) {
-    chunks.push(currentChunk.join('\n\n'));
+    chunks.push(currentChunk.join("\n\n"));
   }
 
   return chunks;
@@ -473,9 +490,10 @@ function splitTextIntoChunks(
   function handleSentence(sentence: string, tokens: number) {
     if (
       currentTokenCount + tokens > maxTokens ||
-      currentChunk.join('\n\n').length + sentence.length > maxChunkSize
+      currentChunk.join("\n\n").length + sentence.length > maxChunkSize
     ) {
-      chunks.push(currentChunk.join('\n\n'));
+      // Flush
+      chunks.push(currentChunk.join("\n\n"));
       currentChunk = [];
       currentTokenCount = 0;
     }
@@ -486,9 +504,10 @@ function splitTextIntoChunks(
   function handleParagraph(para: string, tokens: number) {
     if (
       currentTokenCount + tokens > maxTokens ||
-      currentChunk.join('\n\n').length + para.length > maxChunkSize
+      currentChunk.join("\n\n").length + para.length > maxChunkSize
     ) {
-      chunks.push(currentChunk.join('\n\n'));
+      // Flush
+      chunks.push(currentChunk.join("\n\n"));
       currentChunk = [];
       currentTokenCount = 0;
     }
@@ -497,11 +516,7 @@ function splitTextIntoChunks(
   }
 }
 
-/**
- * Merges an array of consolidated company objects.
- * @param companiesArray - Array of arrays of company objects.
- * @returns Merged and consolidated array of company objects.
- */
+
 export const mergeConsolidatedCompanies = (companiesArray: any[]) => {
   const companyMap = new Map<string, any>();
 
@@ -588,12 +603,20 @@ const mergeValues = (existingVal: any, newVal: any) => {
   return existingVal;
 };
 
-// ==================================================================
-// 4) Analyze Flow Helpers (Extract Text, Summarize, Info Retrieval)
-// ==================================================================
+// File: app/dashboard/utils/utils.tsx (same file, earlier in the module)
 
 /**
  * Extracts text from an array of selected files (PDF/Excel only).
+ * Updated Excel branch to emit one "paragraph" per row.
+ */
+/**
+ * Extracts text from an array of selected files (PDF / Excel only).
+ *  – PDFs:  uses pdfjs‑dist and gathers all `TextItem.str` values per page
+ *  – XLSX:  keeps the “one paragraph per row” logic you already had
+ *  – Other: returns a placeholder explaining why the file was skipped
+ *
+ * Every paragraph is separated by a blank line so downstream
+ * `splitTextIntoChunks()` will treat them as natural chunks.
  */
 async function extractTextsFromFiles(
   allFiles: FileNode[],
@@ -602,81 +625,110 @@ async function extractTextsFromFiles(
   setProcessedFiles: (count: number) => void,
   setProcessingPhase: (phase: string) => void
 ) {
+  /* -------------------------------------------------------------- */
+  /* 0.  House‑keeping                                              */
+  /* -------------------------------------------------------------- */
   setProcessingPhase('extracting');
 
-  const total = allFiles.length;
-  let processedCount = 0;
+  const total           = allFiles.length;
+  let   processedCount  = 0;
+  const newExtracted: Record<string, string> = {};
 
-  const newExtractedTexts: Record<string, string> = {};
+  /* -------------------------------------------------------------- */
+  /* 1.  Ensure pdf.js worker is wired up (once per tab)            */
+  /* -------------------------------------------------------------- */
+  if (!GlobalWorkerOptions.workerSrc) {
+    // The file already lives in /public, so this resolves correctly
+    GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
+  }
 
+  /* -------------------------------------------------------------- */
+  /* 2.  Loop over every selected file                              */
+  /* -------------------------------------------------------------- */
   for (const node of allFiles) {
     let extracted = '';
 
-    // Skip if no data
-    if (!node.base64Data) {
-      continue;
-    }
+    try {
+      if (!node.base64Data) {
+        continue;                                  // nothing to do
+      }
+      const arrayBuffer = base64ToArrayBufferFn(node.base64Data);
 
-    // Convert base64 -> ArrayBuffer
-    const arrayBuffer = base64ToArrayBufferFn(node.base64Data);
+      /* ---------------------------------------------------------- */
+      /* 2‑A.  PDF                                                  */
+      /* ---------------------------------------------------------- */
+      if (node.name.toLowerCase().endsWith('.pdf')) {
+        const loadingTask   = getDocument({ data: arrayBuffer });
+        const pdf           = await loadingTask.promise;
+        const pageTexts: string[] = [];
 
-    // Handle PDF
-    if (node.name.toLowerCase().endsWith('.pdf')) {
-      try {
-        const data = new Uint8Array(arrayBuffer);
-        const pdf = await getDocument({ data }).promise;
-        let text = '';
-
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          const pageText = content.items
-            .filter((item): item is TextItem => 'str' in item)
-            .map((item) => item.str)
+        for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+          const page           = await pdf.getPage(pageNo);
+          const tc             = await page.getTextContent();
+          const pageStr        = tc.items
+            .map(item => {
+              // Both legacy and modern builds expose .str, but we
+              // type‑guard just in case (ts 5.4+ narrowings).
+              return (item as TextItem).str ?? '';
+            })
             .join(' ');
-          text += `[PAGE_START:${i} fileName:${node.name}]${pageText}[PAGE_END:${i}]\n`;
+          pageTexts.push(pageStr.trim());
         }
+        extracted = pageTexts.join('\n\n');
 
-        extracted = text;
-      } catch (err) {
-        console.error(`Failed to extract text from ${node.name}`, err);
-        extracted = '[Error extracting PDF text]';
+        /* Clean up to avoid memory leaks in long sessions */
+        await pdf.destroy();
+        await loadingTask.destroy?.();
       }
-    }
-    // Handle Excel
-    else if (node.name.toLowerCase().match(/\.(xlsx|xls)$/)) {
-      try {
+
+      /* ---------------------------------------------------------- */
+      /* 2‑B.  Excel (unchanged, just wrapped in a try/catch)       */
+      /* ---------------------------------------------------------- */
+      else if (node.name.match(/\.(xlsx|xls)$/i)) {
         const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-        let excelText = '';
-        workbook.SheetNames.forEach((sheetName) => {
-          const worksheet = workbook.Sheets[sheetName];
-          const sheetAsJson = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          (sheetAsJson as (string | number | boolean | null)[][]).forEach((row) => {
-            excelText += row.join(' ') + '\n';
+        const rows: string[] = [];
+
+        workbook.SheetNames.forEach(sheetName => {
+          const ws      = workbook.Sheets[sheetName];
+          const asJson  = XLSX.utils.sheet_to_json<string[][]>(ws, { header: 1 });
+
+          asJson.forEach(row => {
+            const rowText = row.join(' ').trim();
+            if (rowText) rows.push(`[${sheetName}] ${rowText}`);
           });
-          excelText += '\n';
         });
-        extracted = excelText;
-      } catch (err) {
-        console.error(`Failed to extract text from ${node.name}`, err);
-        extracted = '[Error extracting Excel text]';
+
+        extracted = rows.join('\n\n');
       }
-    } else {
-      // Unsupported file type
-      extracted = '[Text extraction not available for this file type]';
+
+      /* ---------------------------------------------------------- */
+      /* 2‑C.  Everything else                                      */
+      /* ---------------------------------------------------------- */
+      else {
+        extracted = '[Text extraction not available for this file type]';
+      }
+    } catch (err) {
+      console.error(`Failed extracting ${node.name}`, err);
+      extracted = `[Error extracting "${node.name}": ${(err as Error).message}]`;
     }
 
-    // Clean up extracted text
-    newExtractedTexts[node.fullPath!] = extracted.trim().replace(/\s+/g, ' ');
+    /* ------------------------------------------------------------ */
+    /* 3.  Normalise whitespace & store result                      */
+    /* ------------------------------------------------------------ */
+    newExtracted[node.fullPath!] = extracted
+      .replace(/\s+/g, ' ')
+      .replace(/ ?\n ?/g, '\n')   // tidy line breaks
+      .trim();
 
-    // Update progress
     processedCount++;
     setProcessedFiles(processedCount);
     setProgress(Math.round((processedCount / total) * 100));
   }
 
-  return newExtractedTexts;
+  return newExtracted;
 }
+
+
 
 /**
  * Summarizes extracted texts using chunk-based prompts.
@@ -906,88 +958,41 @@ async function retrieveInfoFromTexts(
     setProgress(Math.round((count / total) * 100));
   }
 }
-/**
- * Attempts to fix incomplete JSON strings by properly closing open structures.
- * @param incompleteJson The potentially incomplete JSON string
- * @returns A properly formatted JSON string
- * @throws Error if the JSON cannot be parsed even after attempted fixes
- */
-export function fixIncompleteJson(incompleteJson: string): string {
-  let jsonString = incompleteJson.trim();
-  let stack: string[] = [];
-  let i = 0;
 
-  // First, try to parse the JSON as-is
+export function fixIncompleteJson(raw: string): string {
+  const trimmed = raw.trim();
+
+  // 1) Fast path – already valid?
   try {
-    JSON.parse(jsonString);
-    return jsonString;
-  } catch (initialError) {
-    // If it fails, proceed with our fixing logic
-  }
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch { /* continue */ }
 
-  // Analyze the string to determine what might be missing
-  for (i = 0; i < jsonString.length; i++) {
-    const char = jsonString[i];
-    const prevChar = i > 0 ? jsonString[i - 1] : null;
-
-    // Skip escaped characters
-    if (char === '\\' && prevChar !== '\\') {
-      i++; // Skip the next character
-      continue;
-    }
-
-    if (char === '"' && prevChar !== '\\') {
-      // Skip strings
-      while (i < jsonString.length) {
-        i++;
-        if (jsonString[i] === '"' && jsonString[i - 1] !== '\\') {
-          break;
-        }
-      }
-      continue;
-    }
-
-    if (char === '{' || char === '[') {
-      stack.push(char === '{' ? '}' : ']');
-    } else if (char === '}' || char === ']') {
-      if (stack.length > 0 && stack[stack.length - 1] === char) {
-        stack.pop();
-      }
-    }
-  }
-
-  // Add missing closing brackets/braces
-  while (stack.length > 0) {
-    jsonString += stack.pop();
-  }
-
-  // Try to parse the fixed JSON
+  // 2) jsonrepair does heavy lifting
   try {
-    JSON.parse(jsonString);
-    return jsonString;
-  } catch (finalError) {
-    // If still failing, try some common fixes
-    try {
-      // Case 1: Missing closing quote for last property value
-      const lastQuoteIndex = jsonString.lastIndexOf('"');
-      if (lastQuoteIndex > 0 && 
-          jsonString[lastQuoteIndex - 1] !== '\\' && 
-          jsonString.substring(lastQuoteIndex + 1).match(/^\s*[\],}]/)) {
-        const fixedJson = jsonString.substring(0, lastQuoteIndex + 1) + 
-                         '"' + 
-                         jsonString.substring(lastQuoteIndex + 1);
-        JSON.parse(fixedJson);
-        return fixedJson;
-      }
+    const repaired = jsonrepair(trimmed);
+    JSON.parse(repaired);          // make sure it really is valid
+    return repaired;
+  } catch { /* continue */ }
 
-      // Case 2: Missing comma between array/object elements
-      const fixedWithCommas = jsonString.replace(/([}\]"])\s*(["{[])/g, '$1,$2');
-      JSON.parse(fixedWithCommas);
-      return fixedWithCommas;
-    } catch (nestedError) {
-      throw new Error(`Unable to fix JSON: ${(nestedError as Error).message}\nOriginal JSON: ${incompleteJson}`);
+  // 3) Last‑ditch: close unbalanced braces/brackets
+  let fixed = trimmed;
+  const stack: string[] = [];
+  for (let i = 0; i < fixed.length; i++) {
+    const ch = fixed[i];
+    if (ch === '{') stack.push('}');
+    if (ch === '[') stack.push(']');
+    if (ch === '}' || ch === ']') stack.pop();
+    if (ch === '"' && fixed[i - 1] !== '\\') {
+      // skip string
+      i = fixed.indexOf('"', i + 1);
+      if (i === -1) break;
     }
   }
+  while (stack.length) fixed += stack.pop();
+
+  // Still invalid?  Let the caller deal with it.
+  return fixed;
 }
 
 // ==================================================================
@@ -1022,6 +1027,7 @@ export async function analyzeFiles(
   onChunkProgress?: (current: number, total: number) => void
 ) {
   try {
+    debugger;
     setIsAnalyzing(true);
     setProgress(0);
     setProcessedFiles(0);
@@ -1101,41 +1107,42 @@ export const handleConsolidateCompanies = async (
   infoRetrievalModel: string,
   router: any,
   onProgress?: (processed: number, total: number, currentFile: string) => void,
-  onError?: (filePath: string) => void,
+  onError?: (filePath: string, errorMsg: string) => void,   // <‑‑ signature change
 ): Promise<void> => {
   setIsConsolidating(true);
+
+  /** Helper that tries to stringify big JSON safely (truncates) */
+  const safeJsonStringify = (obj: any, maxChars = 15_000) => {
+    let str = JSON.stringify(obj);
+    if (str.length <= maxChars) return str;
+    // keep head + tail, drop middle
+    const slice = Math.floor(maxChars / 2);
+    return `${str.slice(0, slice)} …truncated… ${str.slice(-slice)}`;
+  };
 
   try {
     const allFilePaths = Object.keys(extractedCompanies);
     const total = allFilePaths.length;
-    let processed = 0;
-    if (allFilePaths.length === 0) {
-      throw new Error('No companies extracted - cannot consolidate empty data');
-    }
+    if (total === 0) throw new Error('No companies extracted – cannot consolidate.');
 
-    // Prepare to log each LLM call (prompt + response):
-    const consolidationDebug: Array<{ prompt: string; response: string }> = [];
-
-    //-------------------------------------------------------------------
-    // 1) PER-FILE CONSOLIDATION
-    //-------------------------------------------------------------------
-    // We'll gather each file's consolidated results in an array of arrays
+    const consolidationDebug: { prompt: string; response: string }[] = [];
     const perFileConsolidations: CompanyInfo[][] = [];
-    // Initialize progress
+
+    let processed = 0;
     onProgress?.(0, total, '');
 
     for (const filePath of allFilePaths) {
       try {
         const companiesForFile = extractedCompanies[filePath] || [];
-        if (!companiesForFile.length) {
-          perFileConsolidations.push([]); // nothing to consolidate
+        if (companiesForFile.length === 0) {
+          perFileConsolidations.push([]);
           continue;
         }
 
-        // Build the LLM prompt for just this file’s companies
-        const filePrompt = getIntermediateConsolidationPrompt({ companies: companiesForFile });
+        const filePrompt = getIntermediateConsolidationPrompt({
+          companies: companiesForFile,
+        }).replace('{rawData}', safeJsonStringify({ companies: companiesForFile }));
 
-        // Try calling the LLM
         const res = await fetch('/api/llm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1144,201 +1151,72 @@ export const handleConsolidateCompanies = async (
             model: infoRetrievalModel,
             format: 'json',
             requestType: 'consolidation',
-            logId: sessionId, // for logging
+            logId: sessionId,
           }),
         });
 
         if (!res.ok) {
-          const details = await res.text();
-          throw new Error(`Consolidation failed (file-level) for ${filePath}: ${details}`);
+          const body = await res.text();
+          throw new Error(`${res.status} ${res.statusText} – ${body.slice(0, 200)}`);
         }
 
         const { content } = await res.json();
         const cleaned = content.replace(/```json/gi, '').replace(/```/g, '').trim();
 
-        // In utils.tsx - handleConsolidateCompanies function
-        // Update the response parsing for intermediate consolidation:
         let fileConsolidated: CompanyInfo[] = [];
         try {
-         
-          const parsed = JSON.parse(cleaned);
-
-          // Handle array
-          if (Array.isArray(parsed)) {
-            fileConsolidated = parsed;
-          }
-          // Handle object with "companies" array
-          else if (parsed?.companies && Array.isArray(parsed.companies)) {
-            fileConsolidated = parsed.companies;
-          }
-          // Handle single company
-          else if (parsed?.name) {
-            fileConsolidated = [parsed];
-          }
-
-          // Ensure sources are properly formatted
-          fileConsolidated = fileConsolidated.map(company => ({
-            ...company,
-            sources: company.sources?.map(s => ({
-              filePath: s.filePath,
-              pageNumber: s.pageNumber || undefined,
-              extractionDate: new Date().toISOString(),
-            })) || [],
-          }));
-        } catch (parseErr) {
-          console.error(`File-level parse error [${filePath}]:`, parseErr);
+          const parsed = JSON.parse(fixIncompleteJson(cleaned));
+          if (Array.isArray(parsed)) fileConsolidated = parsed;
+          else if (parsed?.companies) fileConsolidated = parsed.companies;
+          else if (parsed?.name) fileConsolidated = [parsed];
+        } catch (parseErr: any) {
+          throw new Error(`JSON parse error – ${parseErr.message}`);
         }
 
-        // Save debug info
-        consolidationDebug.push({
-          prompt: filePrompt,
-          response: content,
-        });
+        perFileConsolidations.push(
+          fileConsolidated.map(c => ({
+            ...c,
+            sources:
+              c.sources?.map(s => ({
+                ...s,
+                extractionDate: new Date().toISOString(),
+              })) || [],
+          }))
+        );
 
-        // Store the (already consolidated) array
-        perFileConsolidations.push(fileConsolidated);
-
-      } catch (error) {
-        console.error(`Error processing ${filePath}:`, error);
-        onError?.(filePath);
+        consolidationDebug.push({ prompt: filePrompt, response: cleaned });
+      } catch (fileErr: any) {
+        onError?.(filePath, fileErr.message);
+      } finally {
+        processed += 1;
+        onProgress?.(processed, total, filePath);
       }
-
-      processed++;
-      onProgress?.(processed, total, filePath);
     }
 
-    //-------------------------------------------------------------------
-    // 2) GLOBAL CONSOLIDATION (all files combined in chunk(s))
-    //-------------------------------------------------------------------
-    // Flatten all per-file consolidated data
-    onProgress?.(total, total, 'Final global consolidation...');
-    const allCompaniesCombined: CompanyInfo[] = perFileConsolidations.flat();
-    if (allCompaniesCombined.length === 0) {
-      throw new Error('No consolidated data produced at file-level. Stopping.');
-    }
-
-    // Use chunking to avoid token limit issues
-    const modelConfig = getModelConfig(infoRetrievalModel);
-    const maxTokens = modelConfig.contextWindow;
-    const basePrompt = getConsolidationPrompt([]);
-    const baseTokens = estimateTokens(basePrompt) + modelConfig.tokenSafetyMargin;
-    const availableTokens = maxTokens - baseTokens - modelConfig.reservedCompletionTokens;
-
-    // Break final data into manageable chunks
-    const finalChunks: CompanyInfo[][] = [];
-    let currentChunk: CompanyInfo[] = [];
-    let currentTokenCount = 0;
-
-    for (const c of allCompaniesCombined) {
-      const cText = JSON.stringify(c);
-      const cTokens = estimateTokens(cText);
-
-      // If single item is oversize, skip or handle separately
-      if (cTokens > availableTokens) {
-        console.warn(`Skipping oversize company: ${c.name}`);
-        continue;
-      }
-
-      // If adding c would exceed the chunk limit, push current chunk & start new
-      if (currentTokenCount + cTokens > availableTokens) {
-        finalChunks.push(currentChunk);
-        currentChunk = [];
-        currentTokenCount = 0;
-      }
-      currentChunk.push(c);
-      currentTokenCount += cTokens;
-    }
-
-    if (currentChunk.length > 0) {
-      finalChunks.push(currentChunk);
-    }
-
-    // We'll accumulate the final globally consolidated array here
-    // and treat it as ConsolidatedCompany[] after merging
-    let finalConsolidated: ConsolidatedCompany[] = [];
-
-    // Helper to call the LLM for each chunk
-    async function consolidateChunk(companiesChunk: CompanyInfo[]): Promise<CompanyInfo[]> {
-      const chunkPrompt = getConsolidationPrompt({ companies: companiesChunk });
-      const res = await fetch('/api/llm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: chunkPrompt,
-          model: infoRetrievalModel,
-          format: 'json',
-          requestType: 'consolidation',
-          logId: sessionId,
-        }),
-      });
-
-      if (!res.ok) {
-        const details = await res.text();
-        throw new Error(`Global chunk consolidation error: ${details}`);
-      }
-
-      const { content } = await res.json();
-      const cleaned = content.replace(/```json/gi, '').replace(/```/g, '').trim();
-
-      let chunkResult: CompanyInfo[] = [];
-      try {
-        const parsed = JSON.parse(cleaned);
-        if (parsed && Array.isArray(parsed.companies)) {
-          chunkResult = parsed.companies;
-        } else if (Array.isArray(parsed)) {
-          chunkResult = parsed;
-        }
-      } catch (parseErr) {
-        console.error('Global-level parse error:', parseErr);
-      }
-
-      // Log debug
-      consolidationDebug.push({
-        prompt: chunkPrompt,
-        response: content,
-      });
-
-      return chunkResult;
-    }
-
-    // Consolidate each chunk individually, merging into finalConsolidated
-    for (const chunk of finalChunks) {
-      const chunkRes = await consolidateChunk(chunk);
-      // mergeCompaniesFn returns an array of "any", so we safely cast it
-      const merged = mergeCompaniesFn([finalConsolidated, chunkRes]) as ConsolidatedCompany[];
-      finalConsolidated = merged;
-    }
-
-    // 3) Save final to heavyData
-    // Ensure each item has defaults for the ConsolidatedCompany properties
+    // ---------- global merge ----------
+    const merged = mergeCompaniesFn([perFileConsolidations.flat()]) as ConsolidatedCompany[];
+    // Save heavy data including consolidation debug
     await saveHeavyData(sessionId, {
       fileTree,
       extractedTexts,
       summaries,
       extractedCompanies,
       rawResponses,
-      consolidatedCompanies: finalConsolidated.map(company => ({
-        ...company,
-        dates: company.dates || [],
-        ownershipPath: company.ownershipPath || [],
-        parent: company.parent || null,
-        variables: company.variables || {},
-      })),
+      consolidatedCompanies: merged,
+      consolidationDebug,   // include raw consolidation prompts/responses
     });
 
-    // 4) Store debug logs
     setLlmConsolidationDebug(consolidationDebug);
-
-    // 5) Navigate to /companies
     router.push(`/companies?sessionId=${sessionId}`);
-  } catch (error) {
-    console.error('Error (two-step consolidation):', error);
-    // If something fails, we show a fallback
+  } catch (err) {
+    console.error('Consolidation fatal:', err);
     router.push(`/companies?sessionId=${sessionId}&message=noData`);
   } finally {
     setIsConsolidating(false);
   }
 };
+
+
 
 
 // ==================================================================
@@ -1363,32 +1241,82 @@ export function addBase64ToTree(nodes: FileNode[]): FileNode[] {
   });
 }
 
-export function convertTree(nodes: FileNode[], sessionId: number | string): FileNode[] {
-  return nodes.map((node) => {
-    if (node.type === 'folder' && node.children) {
-      return { ...node, children: convertTree(node.children, sessionId) };
+/**
+ * Re‑builds a FileNode tree that was persisted to disk.
+ *
+ * ‑ Converts any `base64Data` blob back into `rawData` (ArrayBuffer) so the UI
+ *   can display the file immediately without another fetch.
+ * ‑ Restores the **selected** flag that determines whether the file is included
+ *   in a new analysis.  If the flag is missing (older sessions) we default to
+ *   `true`, matching the behaviour of freshly‑uploaded files.
+ * ‑ Rewrites `content` to an internal `/api/session-file` URL when the node was
+ *   stored on disk (`localPath` present).
+ *
+ * @param nodes     Tree loaded from heavyData.json
+ * @param sessionId Numeric or string session identifier
+ * @returns         A new tree ready for the dashboard
+ */
+export function convertTree(
+  nodes: FileNode[],
+  sessionId: number | string
+): FileNode[] {
+  return nodes.map<FileNode>((node) => {
+    /* ------------------------------------------------------------------ */
+    /* 1.  Preserve / normalise common properties                         */
+    /* ------------------------------------------------------------------ */
+    const base: FileNode = {
+      ...node,
+      // ensure we keep the previous state; default to true for back‑compat
+      selected: node.selected ?? true,
+    };
+
+    /* ------------------------------------------------------------------ */
+    /* 2.  Recurse into folders                                           */
+    /* ------------------------------------------------------------------ */
+    if (base.type === 'folder' && base.children) {
+      return {
+        ...base,
+        children: convertTree(base.children, sessionId),
+      };
     }
-    if (node.type === 'file') {
-      // Convert base64 => rawData if present
-      if (node.base64Data) {
-        const binaryString = atob(node.base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        node.rawData = bytes.buffer;
-        node.base64Data = undefined; // free it up
+
+    /* ------------------------------------------------------------------ */
+    /* 3.  File‑specific processing                                       */
+    /* ------------------------------------------------------------------ */
+    if (base.type === 'file') {
+      let rawData = base.rawData;
+
+      // (a)  base64 ➜ ArrayBuffer
+      if (base.base64Data) {
+        const binary = atob(base.base64Data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        rawData = bytes.buffer;
       }
-      // Build the inline content path if localPath is present
-      if (node.localPath) {
-        node.content = `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(
-          node.localPath || ''
-        )}`;
-      }
+
+      // (b)  Build in‑app URL for files stored on disk
+      const contentUrl =
+        base.localPath
+          ? `/api/session-file?sessionId=${sessionId}&filePath=${encodeURIComponent(
+              base.localPath
+            )}`
+          : base.content;
+
+      return {
+        ...base,
+        rawData,
+        base64Data: undefined, // free memory
+        content: contentUrl,
+      };
     }
-    return node;
+
+    /* ------------------------------------------------------------------ */
+    /* 4.  Fallback (shouldn’t really hit)                                */
+    /* ------------------------------------------------------------------ */
+    return base;
   });
 }
+
 
 /**
  * Toggles selection (selected/unselected) for all files in the file tree.
@@ -1507,31 +1435,52 @@ export async function saveSession(
   setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>,
   setSuccessMessage: React.Dispatch<React.SetStateAction<string>>
 ): Promise<string> {
+  /* -------------------------------------------------------------- */
+  /*  Fallback name if the caller passes an empty / blank string    */
+  /* -------------------------------------------------------------- */
+  const fallback   = `Upload — ${new Date().toLocaleString('en-GB')}`;
+  const nameToUse  = sessionName?.trim() || fallback;
+
+  /* -------------------------------------------------------------- */
+  /*  Prepare file‑tree payload (adds base64 blobs)                 */
+  /* -------------------------------------------------------------- */
   const fileTreeWithBase64 = addBase64ToTree(fileTree);
+
+  /* -------------------------------------------------------------- */
+  /*  1️⃣  create / upsert the lightweight “session” row            */
+  /* -------------------------------------------------------------- */
   const res = await fetch('/api/sessions', {
-    method: 'POST',
+    method : 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-user-id': localStorage.getItem('userId') || '',
+      'x-user-id'   : localStorage.getItem('userId') || '',
     },
-    body: JSON.stringify({ sessionName }),
+    body: JSON.stringify({ sessionName: nameToUse }),
   });
   if (!res.ok) throw new Error('Failed to save session');
-  const data = await res.json();
-  setCurrentSessionId(data.session_id);
+  const data = await res.json();                 // { session_id: string }
+
+  /* -------------------------------------------------------------- */
+  /*  2️⃣  dump the heavy data (fileTree, texts, etc.)              */
+  /* -------------------------------------------------------------- */
   await saveHeavyData(data.session_id, {
-    fileTree: fileTreeWithBase64,
+    fileTree          : fileTreeWithBase64,
     extractedTexts,
     summaries,
     extractedCompanies,
     rawResponses,
   });
 
+  /* -------------------------------------------------------------- */
+  /*  3️⃣  finish up – update state + localStorage                  */
+  /* -------------------------------------------------------------- */
   setCurrentSessionId(data.session_id);
   setSuccessMessage('Session saved successfully!');
-  localStorage.setItem('currentSessionId', data.session_id); // Store in local storage
+  localStorage.setItem('currentSessionId', data.session_id);
+
   return data.session_id;
 }
+
 
 export const handleLoadClick = async (
   setAvailableSessions: React.Dispatch<React.SetStateAction<any[]>>,

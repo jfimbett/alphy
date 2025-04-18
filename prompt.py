@@ -8,8 +8,10 @@ def main():
     
     # List of folders and files relative to the script's directory
     entries = [
-        'app/api/api-keys',
-        'app/settings',
+        'app/dashboard',
+        'app/companies'
+        'app/api',
+        'lib/prompts.ts'
     ]  
 
     # Path to the starting prompt file

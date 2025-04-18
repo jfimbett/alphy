@@ -50,3 +50,7 @@ body {
 .animate-fadeInUp {
   animation: fadeInUp 0.8s ease-out;
 }
+
+.copy-feedback {
+  transition: opacity 0.3s ease-in-out;
+}
