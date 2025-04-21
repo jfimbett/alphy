@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import { SessionSummary } from '@/app/history/page'; // or define your own type if needed
-import { mergeConsolidatedCompanies } from '@/app/dashboard/utils/utils';
+import { mergeConsolidatedCompanies, estimateTokens } from '@/app/dashboard/utils/utils';
 import * as XLSX from 'xlsx';
 
 /* ------------------------------------------------------------------
@@ -85,6 +85,8 @@ export default function CompaniesPage() {
 
   // Session list
   const [sessions, setSessions]         = useState<SessionSummary[]>([]);
+  // Estimated token usage for this session
+  const [tokenCount, setTokenCount]     = useState<number>(0);
 
   // Loading / error
   const [loading, setLoading]           = useState(true);
@@ -265,6 +267,18 @@ export default function CompaniesPage() {
     };
     fetchConsolidatedData();
   }, [existingSessionId]);
+
+  // Recompute token count when LLM responses change
+  useEffect(() => {
+    let total = 0;
+    Object.values(rawResponses).forEach(({ prompt, response }) => {
+      total += estimateTokens(prompt) + estimateTokens(response);
+    });
+    consolidationDebug.forEach(({ prompt, response }) => {
+      total += estimateTokens(prompt) + estimateTokens(response);
+    });
+    setTokenCount(total);
+  }, [rawResponses, consolidationDebug]);
 
   /* ----------  Early return: loading / error / noData  ---------- */
   if (loading) return <div className="p-6">Loading…</div>;
@@ -481,6 +495,11 @@ export default function CompaniesPage() {
           >
             Download Excel
           </button>
+        </div>
+        {/* Token usage summary */}
+        <div className="mb-4 text-gray-700">
+          <span className="font-medium">Estimated LLM tokens used:</span>{" "}
+          <span className="font-semibold">{tokenCount}</span>
         </div>
 
         {renderCompanySection('fund', '#2563eb')}

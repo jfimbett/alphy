@@ -1026,8 +1026,9 @@ export async function analyzeFiles(
   logId:string,
   onChunkProgress?: (current: number, total: number) => void
 ) {
+  // We'll collect final extracted companies here and return them
+  let finalExtractedCompanies: Record<string, CompanyInfo[]> = {};
   try {
-    debugger;
     setIsAnalyzing(true);
     setProgress(0);
     setProcessedFiles(0);
@@ -1073,15 +1074,13 @@ export async function analyzeFiles(
       );
     }
 
-    let finalExtractedCompanies: Record<string, CompanyInfo[]> = {};
     if (options.runInfoRetrieval && options.infoRetrievalModel) {
-      // <--- Use the updated function that returns a local result
+      // Use refactored chunked info retrieval, returns final map
       finalExtractedCompanies = await retrieveInfoFromTextsRefactored(
         newExtractedTexts,
         options.infoRetrievalModel,
         logId
       );
-      // Now do a single setState:
       setExtractedCompanies(finalExtractedCompanies);
     }
 
@@ -1091,6 +1090,8 @@ export async function analyzeFiles(
     setIsAnalyzing(false);
     setProcessingPhase('idle');
   }
+  // Return the final map of extracted companies (may be empty)
+  return finalExtractedCompanies;
 }
 
 export const handleConsolidateCompanies = async (
@@ -1195,7 +1196,7 @@ export const handleConsolidateCompanies = async (
 
     // ---------- global merge ----------
     const merged = mergeCompaniesFn([perFileConsolidations.flat()]) as ConsolidatedCompany[];
-    // Save heavy data including consolidation debug
+    // Save consolidation debug and merged companies to server
     await saveHeavyData(sessionId, {
       fileTree,
       extractedTexts,
@@ -1205,7 +1206,6 @@ export const handleConsolidateCompanies = async (
       consolidatedCompanies: merged,
       consolidationDebug,   // include raw consolidation prompts/responses
     });
-
     setLlmConsolidationDebug(consolidationDebug);
     router.push(`/companies?sessionId=${sessionId}`);
   } catch (err) {
@@ -1346,6 +1346,7 @@ export const saveHeavyData = async (
     extractedCompanies: Record<string, CompanyInfo[]>;
     rawResponses: Record<string, { prompt: string; response: string }>;
     consolidatedCompanies?: ConsolidatedCompany[];
+    consolidationDebug?: { prompt: string; response: string }[];
   }
 ) => {
   try {
@@ -1381,7 +1382,7 @@ export const openSaveModal = async (
   setExistingUploads: React.Dispatch<React.SetStateAction<ExistingUpload[]>>,
   setFetchingUploads: React.Dispatch<React.SetStateAction<boolean>>,
 ): Promise<void> => {
-  setNewUploadName('');
+  // preserve existing session name (e.g. folder name), do not reset
   setExistingUploadId(null);
   setSelectedUploadOption('new');
   try {

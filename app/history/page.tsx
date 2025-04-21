@@ -15,6 +15,8 @@ export interface SessionSummary {
 export default function HistoryPage() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -56,6 +58,40 @@ export default function HistoryPage() {
     setSelectedSession(session);
     setShowDeleteModal(true);
   }
+  // Edit session name handlers
+  const handleEdit = (session: SessionSummary) => {
+    setEditingSessionId(session.session_id);
+    setEditingName(session.session_name);
+  };
+  const handleCancelEdit = () => {
+    setEditingSessionId(null);
+    setEditingName('');
+  };
+  const handleSaveEdit = async (sessionId: number) => {
+    try {
+      const userId = localStorage.getItem('userId') || '';
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'PUT',
+        headers: {
+          'x-user-id': userId,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ sessionName: editingName })
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to update session name');
+      }
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.session_id === sessionId ? { ...s, session_name: editingName } : s
+        )
+      );
+      handleCancelEdit();
+    } catch (err: any) {
+      alert('Error updating session name: ' + (err.message || err));
+    }
+  };
 
   function handleCloseDeleteModal() {
     setShowDeleteModal(false);
@@ -116,9 +152,40 @@ export default function HistoryPage() {
                 className="border p-4 rounded bg-white flex justify-between"
               >
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-600">
-                    {session.session_name}
-                  </h2>
+                  {editingSessionId === session.session_id ? (
+                    <div className="flex items-center space-x-2">
+                      <input
+                        className="border p-1 rounded"
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                      />
+                      <button
+                        onClick={() => handleSaveEdit(session.session_id)}
+                        className="bg-blue-600 text-white px-2 py-1 rounded"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={handleCancelEdit}
+                        className="bg-gray-200 px-2 py-1 rounded"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2">
+                      <h2 className="text-lg font-semibold text-gray-600">
+                        {session.session_name}
+                      </h2>
+                      <button
+                        onClick={() => handleEdit(session)}
+                        className="text-sm text-gray-500 hover:text-gray-800"
+                        title="Edit session name"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  )}
                   <p className="text-sm text-gray-600">
                     Created: {new Date(session.created_at).toLocaleString()}
                   </p>
@@ -130,7 +197,7 @@ export default function HistoryPage() {
                     onClick={() => router.push(`/history/${session.session_id}`)}
                     className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                   >
-                    View Details
+                    Details
                   </button>
 
                       {/* NEW "Load Session" button */}
@@ -143,7 +210,7 @@ export default function HistoryPage() {
                     }}
                     className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700"
                   >
-                    Load Session
+                    Load 
                   </button>
 
                   {/* Delete Session (opens our custom modal) */}

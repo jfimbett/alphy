@@ -6,7 +6,7 @@ import path from 'path';
 
 export async function GET(
   request: Request,
-  { params }: { params: { sessionId: string } }
+  context: { params: Promise<{ sessionId: string }> }
 ) {
   const client = await pool.connect();
   try {
@@ -14,7 +14,9 @@ export async function GET(
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const sId = parseInt(params.sessionId, 10);
+    // Await params to support async dynamic params in Next.js
+    const { sessionId } = await context.params;
+    const sId = parseInt(sessionId, 10);
     if (isNaN(sId)) {
       return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
     }
@@ -40,7 +42,7 @@ export async function GET(
 
 export async function DELETE(
   request: Request,
-  { params }: { params: { sessionId: string } }
+  context: { params: Promise<{ sessionId: string }> }
 ) {
   const client = await pool.connect();
   await client.query('BEGIN');
@@ -49,7 +51,9 @@ export async function DELETE(
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const sId = parseInt(params.sessionId, 10);
+    // Await params to support async dynamic params in Next.js
+    const { sessionId } = await context.params;
+    const sId = parseInt(sessionId, 10);
     if (isNaN(sId)) {
       return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
     }
@@ -90,6 +94,50 @@ export async function DELETE(
     await client.query('ROLLBACK');
     console.error('Error deleting session:', error);
     return NextResponse.json({ error: 'Error deleting session' }, { status: 500 });
+  } finally {
+    client.release();
+  }
+}
+// Update a session name
+export async function PUT(
+  request: Request,
+  context: { params: Promise<{ sessionId: string }> }
+) {
+  const client = await pool.connect();
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { sessionId } = await context.params;
+    const sId = parseInt(sessionId, 10);
+    if (isNaN(sId)) {
+      return NextResponse.json({ error: 'Invalid session ID' }, { status: 400 });
+    }
+    const body = await request.json();
+    const sessionName = body.sessionName;
+    if (typeof sessionName !== 'string') {
+      return NextResponse.json({ error: 'Invalid session name' }, { status: 400 });
+    }
+    const result = await client.query(
+      `UPDATE sessions SET session_name = $1 WHERE session_id = $2 AND user_id = $3 RETURNING session_id, session_name`,
+      [sessionName, sId, userId]
+    );
+    if (result.rowCount === 0) {
+      return NextResponse.json(
+        { error: 'Session not found or not authorized' },
+        { status: 404 }
+      );
+    }
+    const updated = result.rows[0];
+    return NextResponse.json({
+      success: true,
+      session_id: updated.session_id,
+      session_name: updated.session_name
+    });
+  } catch (err) {
+    console.error('Error updating session:', err);
+    return NextResponse.json({ error: 'Error updating session' }, { status: 500 });
   } finally {
     client.release();
   }

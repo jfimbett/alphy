@@ -2,12 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-import {
-  defaultSummarizationTemplate,
-  defaultExtractionTemplate,
-  defaultConsolidationTemplate,
-  defaultVariableExtraction
-} from '@/lib/prompts';
+import { MODEL_TOKEN_LIMITS } from '@/lib/modelConfig';
 
 export default function SettingsPage() {
   /*****************************************************************
@@ -23,11 +18,22 @@ export default function SettingsPage() {
   // Success/error messaging
   const [message, setMessage] = useState('');
 
-  // LLM prompt templates
-  const [summarizationTemplate, setSummarizationTemplate] = useState(defaultSummarizationTemplate);
-  const [extractionTemplate, setExtractionTemplate]       = useState(defaultExtractionTemplate);
-  const [consolidationTemplate, setConsolidationTemplate] = useState(defaultConsolidationTemplate);
-  const [variableExtraction, setVariableExtraction]       = useState(defaultVariableExtraction);
+  // Model selection (moved from Dashboard)
+  // Default to first model in MODEL_TOKEN_LIMITS if none set
+  const defaultModel = Object.keys(MODEL_TOKEN_LIMITS)[0] || '';
+  const [summarizationModel, setSummarizationModel] = useState<string>(
+    localStorage.getItem('summarizationModel') || defaultModel
+  );
+  const [infoRetrievalModel, setInfoRetrievalModel] = useState<string>(
+    localStorage.getItem('infoRetrievalModel') || defaultModel
+  );
+  // Default analysis options
+  const [runSummDefault, setRunSummDefault] = useState<boolean>(
+    localStorage.getItem('runSummarizationDefault') === 'true'
+  );
+  const [runInfoRetrDefault, setRunInfoRetrDefault] = useState<boolean>(
+    localStorage.getItem('runInfoRetrievalDefault') !== 'false'
+  );
   const [appGeneratedKeys, setAppGeneratedKeys]           = useState<{ key: string; created_at: string }[]>([]);
 
   useEffect(() => {
@@ -142,15 +148,11 @@ const deleteAppKey = async (key: string) => {
       }
       setUser({ id: userId, email });
 
-      // Load saved templates from local storage
-      const savedSummarization = localStorage.getItem('summarizationTemplate');
-      const savedExtraction = localStorage.getItem('extractionTemplate');
-      const savedConsolidation = localStorage.getItem('consolidationTemplate');
-      const savedVarExtraction = localStorage.getItem('variableExtraction');
-      if (savedSummarization) setSummarizationTemplate(savedSummarization);
-      if (savedExtraction) setExtractionTemplate(savedExtraction);
-      if (savedConsolidation) setConsolidationTemplate(savedConsolidation);
-      if (savedVarExtraction) setVariableExtraction(savedVarExtraction);
+      // Load chosen models from local storage
+      const savedSumModel = localStorage.getItem('summarizationModel');
+      const savedInfoModel = localStorage.getItem('infoRetrievalModel');
+      if (savedSumModel) setSummarizationModel(savedSumModel);
+      if (savedInfoModel) setInfoRetrievalModel(savedInfoModel);
 
       // Also fetch LLM keys from your endpoint if needed
       try {
@@ -222,20 +224,6 @@ const deleteAppKey = async (key: string) => {
     }
   };
 
-  // Save custom prompt templates
-  const saveTemplates = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      localStorage.setItem('summarizationTemplate', summarizationTemplate);
-      localStorage.setItem('extractionTemplate', extractionTemplate);
-      localStorage.setItem('consolidationTemplate', consolidationTemplate);
-      localStorage.setItem('variableExtraction', variableExtraction);
-      setMessage('Templates saved successfully');
-    } catch (err) {
-      setMessage('Error saving templates');
-      console.error(err);
-    }
-  };
 
   /*****************************************************************
    * 5) RENDERING THE SETTINGS PAGE
@@ -262,6 +250,74 @@ const deleteAppKey = async (key: string) => {
           <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
             Update Profile
           </button>
+        </form>
+
+        {/* -------------------- Default Analysis Options -------------------- */}
+        <form onSubmit={(e) => e.preventDefault()} className="bg-white p-6 rounded-lg shadow mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">Default Analysis Options</h2>
+          <div className="mb-4 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={runSummDefault}
+              onChange={(e) => {
+                setRunSummDefault(e.target.checked);
+                localStorage.setItem('runSummarizationDefault', e.target.checked.toString());
+              }}
+              className="h-4 w-4"
+            />
+            <label className="text-gray-700">Run Summarization by Default</label>
+          </div>
+          <div className="mb-4 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={runInfoRetrDefault}
+              onChange={(e) => {
+                setRunInfoRetrDefault(e.target.checked);
+                localStorage.setItem('runInfoRetrievalDefault', e.target.checked.toString());
+              }}
+              className="h-4 w-4"
+            />
+            <label className="text-gray-700">Run Information Retrieval by Default</label>
+          </div>
+        </form>
+
+        {/* -------------------- Model Selection -------------------- */}
+        <form onSubmit={(e) => e.preventDefault()} className="bg-white p-6 rounded-lg shadow mb-6">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">Model Selection</h2>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-1">
+              Summarization Model
+            </label>
+            <select
+              value={summarizationModel}
+              onChange={(e) => {
+                setSummarizationModel(e.target.value);
+                localStorage.setItem('summarizationModel', e.target.value);
+              }}
+              className="w-full p-2 border rounded text-gray-700"
+            >
+              {Object.keys(MODEL_TOKEN_LIMITS).map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-1">
+              Information Retrieval Model
+            </label>
+            <select
+              value={infoRetrievalModel}
+              onChange={(e) => {
+                setInfoRetrievalModel(e.target.value);
+                localStorage.setItem('infoRetrievalModel', e.target.value);
+              }}
+              className="w-full p-2 border rounded text-gray-700"
+            >
+              {Object.keys(MODEL_TOKEN_LIMITS).map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
         </form>
 
         {/* -------------------- Our Application Access Keys ------------------- */}
@@ -363,61 +419,6 @@ const deleteAppKey = async (key: string) => {
           </button>
         </form>
 
-        {/* -------------------- LLM Prompt Templates -------------------- */}
-        <form onSubmit={saveTemplates} className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800">LLM Prompt Templates</h2>
-          <p className="mb-2 text-gray-600">
-            Customize the prompt templates used at each step of your private equity document analysis.
-          </p>
-
-          {/* Summarization Template */}
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Summarization Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={6}
-            value={summarizationTemplate}
-            onChange={(e) => setSummarizationTemplate(e.target.value)}
-          />
-
-          {/* Extraction Template */}
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Extraction Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={8}
-            value={extractionTemplate}
-            onChange={(e) => setExtractionTemplate(e.target.value)}
-          />
-
-          {/* Consolidation Template */}
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Consolidation Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={10}
-            value={consolidationTemplate}
-            onChange={(e) => setConsolidationTemplate(e.target.value)}
-          />
-
-          {/* Variable Extraction Template */}
-          <label className="block text-sm font-medium text-gray-600 mt-4">
-            Variable Extraction Template
-          </label>
-          <textarea
-            className="w-full p-2 border rounded text-gray-700"
-            rows={6}
-            value={variableExtraction}
-            onChange={(e) => setVariableExtraction(e.target.value)}
-          />
-
-          <button type="submit" className="mt-4 bg-blue-600 text-white px-4 py-2 rounded">
-            Save Templates
-          </button>
-        </form>
 
         {/* -------------------- Final messages -------------------- */}
         {message && (

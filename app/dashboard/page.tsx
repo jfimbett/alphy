@@ -1,4 +1,3 @@
-// File: app/dashboard/page.tsx
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
@@ -9,7 +8,6 @@ import FileTree, { FileNode } from '@/components/FileTree';
 import SelectedFilePanel from '@/components/dashboard/FilePreviewSection';
 import ChatSection from '@/components/dashboard/ChatSection';
 import ChatContextRadioButtons from '@/components/dashboard/RadioButtons';
-import ModelSelector from '@/components/dashboard/ModelSelector';
 import FileAnalysisButtons from '@/components/dashboard/FileAnalysisProgress';
 import SaveModal from '@/components/dashboard/SaveSessionModal';
 import LoadModal from '@/components/dashboard/LoadSessionModal';
@@ -23,7 +21,7 @@ import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { SessionSummary } from '@/app/history/page';
 import Navbar from '@/components/Navbar';
 
-import { getModelConfig } from '@/lib/modelConfig';
+import { getModelConfig, MODEL_TOKEN_LIMITS } from '@/lib/modelConfig';
 
 import JSZip from 'jszip';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
@@ -65,7 +63,6 @@ import {
   handleSaveConfirm,
   confirmLoadSession,
   analyzeFiles,
-  saveHeavyData,
   saveSession,
   ExistingUpload
 } from '@/app/dashboard/utils/utils';
@@ -92,10 +89,17 @@ export default function Dashboard() {
   const [progress, setProgress]                                     = useState(0);
   const [totalFiles, setTotalFiles]                                 = useState(0);
   const [processedFiles, setProcessedFiles]                         = useState(0);
-  const [selectedSummarizationModel, setSelectedSummarizationModel] = useState('deepseek:deepseek-chat');
-  const [selectedInfoRetrievalModel, setSelectedInfoRetrievalModel] = useState('deepseek:deepseek-reasoner');
-  const [runSummarization, setRunSummarization]                     = useState(true);
-  const [runInfoRetrieval, setRunInfoRetrieval]                     = useState(true);
+  // Default analysis toggles are configured in Settings (localStorage)
+  const [runSummarization, setRunSummarization] = useState<boolean>(() => {
+    // Avoid accessing localStorage during SSR
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('runSummarizationDefault') === 'true';
+  });
+  const [runInfoRetrieval, setRunInfoRetrieval] = useState<boolean>(() => {
+    // Avoid accessing localStorage during SSR
+    if (typeof window === 'undefined') return true;
+    return localStorage.getItem('runInfoRetrievalDefault') !== 'false';
+  });
   const [currentZipName, setCurrentZipName]                         = useState<string | null>(null);
   const [highlightedFiles, setHighlightedFiles]                     = useState<Set<string>>(new Set());
   const [showExtracted, setShowExtracted]                           = useState(false);
@@ -121,8 +125,7 @@ export default function Dashboard() {
   /* ------------------------------------------------------------------ */
   /*  ➤ NEW LOCAL STATE (friendly name + auto‑consolidate flag)         */
   /* ------------------------------------------------------------------ */
-  const [uploadName, setUploadName]                                 = useState<string>('');
-  const [autoConsolidate, setAutoConsolidate]                       = useState(false);
+  const [uploadName, setUploadName] = useState<string>('');
 
   /* ------------------------------------------------------------------ */
   /*  ➤ ROUTER + REFS                                                   */
@@ -149,10 +152,60 @@ export default function Dashboard() {
       }
       const savedSessionId = localStorage.getItem('currentSessionId');
       if (savedSessionId) {
-        setCurrentSessionId(savedSessionId);
+        // Verify stored session exists before restoring
+        (async () => {
+          try {
+            const resp = await fetch('/api/sessions', {
+              headers: { 'x-user-id': localStorage.getItem('userId') || '' },
+            });
+            if (!resp.ok) {
+              localStorage.removeItem('currentSessionId');
+              return;
+            }
+            const data = await resp.json();
+            const sessions: Array<{ session_id: number }> = data.sessions || [];
+            const exists = sessions.some(s => s.session_id.toString() === savedSessionId);
+            if (exists) {
+              setCurrentSessionId(savedSessionId);
+            } else {
+              localStorage.removeItem('currentSessionId');
+            }
+          } catch (err) {
+            console.warn('Error verifying saved session ID', err);
+            localStorage.removeItem('currentSessionId');
+          }
+        })();
       }
     }
   }, [router]);
+
+  /* ------------------------------------------------------------------ */
+  /*  ➤ RESTORE HEAVY DATA ON MOUNT                                     */
+  /* ------------------------------------------------------------------ */
+  useEffect(() => {
+    if (!currentSessionId) return;
+    // Fetch and restore heavy data (fileTree, texts, summaries, companies, responses)
+    (async () => {
+      try {
+        const res = await fetch(`/api/store-heavy-data?sessionId=${currentSessionId}`);
+        if (!res.ok) {
+          console.error('Failed to load heavy data');
+          return;
+        }
+        const data = await res.json();
+        // Rebuild file tree with correct local paths or base64
+        const rebuiltTree = convertTree(data.fileTree || [], currentSessionId);
+        setFileTree(rebuiltTree);
+        // Restore extracted texts, summaries, companies, and raw responses
+        setExtractedTexts(data.extractedTexts || {});
+        setSummaries(data.summaries || {});
+        setExtractedCompanies(data.extractedCompanies || {});
+        setRawResponses(data.rawResponses || {});
+      } catch (error) {
+        console.error('Error loading heavy data:', error);
+      }
+    })();
+  }, [currentSessionId]);
 
   /* ------------------------------------------------------------------ */
   /*  STEP ❶ – capture the folder / zip name                            */
@@ -175,12 +228,21 @@ export default function Dashboard() {
   async function runFullAnalysis() {
     try {
       /* ---- 1. run analysis ----------------------------------------- */
-      await analyzeFiles(
+      // Determine models from settings, defaulting to first model key
+      const defaultModel = Object.keys(MODEL_TOKEN_LIMITS)[0] || '';
+      const summarizationModel = runSummarization
+        ? localStorage.getItem('summarizationModel') || defaultModel
+        : undefined;
+      const infoRetrievalModel = runInfoRetrieval
+        ? localStorage.getItem('infoRetrievalModel') || defaultModel
+        : undefined;
+      // Perform analysis; get back the per-file extracted companies
+      const finalExtractedCompanies = await analyzeFiles(
         {
           runSummarization,
           runInfoRetrieval,
-          summarizationModel : runSummarization ? selectedSummarizationModel : undefined,
-          infoRetrievalModel : runInfoRetrieval ? selectedInfoRetrievalModel : undefined,
+          summarizationModel,
+          infoRetrievalModel,
         },
         fileTree,
         getAllFiles,
@@ -213,20 +275,45 @@ export default function Dashboard() {
       });
       const niceName = `${uploadName || 'Session'} — ${when}`;
 
-      /* ---- 3. save session ----------------------------------------- */
-      await saveSession(
+      /* ---- 3. save session and trigger consolidation ---------------- */
+      // Create session and store initial heavy data
+      const sessionId = await saveSession(
         niceName,
         fileTree,
         extractedTexts,
         summaries,
-        extractedCompanies,
+        finalExtractedCompanies,
         rawResponses,
         setCurrentSessionId,
         setSuccessMessage
       );
-
-      /* ---- 4. trigger consolidation -------------------------------- */
-      setAutoConsolidate(true);
+      // Determine consolidation model
+      const consolidationModel = runInfoRetrieval
+        ? localStorage.getItem('infoRetrievalModel') || defaultModel
+        : '';
+      // Kick off consolidation automatically
+      handleConsolidateCompanies(
+        sessionId,
+        fileTree,
+        extractedTexts,
+        summaries,
+        finalExtractedCompanies,
+        rawResponses,
+        setIsConsolidating,
+        setLlmConsolidationDebug,
+        setSuccessMessage,
+        mergeConsolidatedCompanies,
+        consolidationModel,
+        router,
+        /* onProgress */ (processed, total, currentFile) => {
+          setConsolidateProgress(processed);
+          setTotalFilesToConsolidate(total);
+          setCurrentConsolidatingFile(currentFile);
+        },
+        /* onError */ (errorFile, msg) => {
+          setErrorFiles(prev => [...prev, { file: errorFile, error: msg }]);
+        }
+      );
 
     } catch (err) {
       console.error('Analysis failed:', err);
@@ -237,70 +324,16 @@ export default function Dashboard() {
     }
   }
 
-  /* ------------------------------------------------------------------ */
-  /*  STEP ❸ – auto‑consolidate once analysis is done                   */
-  /* ------------------------------------------------------------------ */
-  useEffect(() => {
-    if (!autoConsolidate) return;            // nothing to do yet
-    if (isConsolidating) return;             // already busy
-    if (!currentSessionId) return;           // need a session id
-
-    const hasCompanies = Object.values(extractedCompanies)
-      .some(arr => (arr || []).length > 0);
-    if (!hasCompanies) return;               // nothing to consolidate
-
-    // reset flag
-    setAutoConsolidate(false);
-
-    // (optional) filter empty arrays
-    const filtered = Object.fromEntries(
-      Object.entries(extractedCompanies).filter(([, arr]) => (arr || []).length > 0)
-    );
-    setExtractedCompanies(filtered);
-
-    // kick off consolidation
-    handleConsolidateCompanies(
-      currentSessionId,
-      fileTree,
-      extractedTexts,
-      summaries,
-      filtered,
-      rawResponses,
-      setIsConsolidating,
-      setLlmConsolidationDebug,
-      setSuccessMessage,
-      mergeConsolidatedCompanies,
-      selectedInfoRetrievalModel,
-      router,
-      /* onProgress */ (processed, total, currentFile) => {
-        setConsolidateProgress(processed);
-        setTotalFilesToConsolidate(total);
-        setCurrentConsolidatingFile(currentFile);
-      },
-      /* onError */ (errorFile, msg) => {
-        setErrorFiles(prev => [...prev, { file: errorFile, error: msg }]);
-      }
-    );
-  }, [
-    autoConsolidate,
-    isConsolidating,
-    currentSessionId,
-    extractedCompanies,
-    fileTree,
-    extractedTexts,
-    summaries,
-    rawResponses,
-    selectedInfoRetrievalModel,
-    router
-  ]);
+  // Auto-consolidation has been removed; consolidation can now be triggered manually via the UI
 
   /* ------------------------------------------------------------------ */
   /*  ➤ RENDER                                                          */
   /* ------------------------------------------------------------------ */
+  // Default model for analysis if none set
+  const defaultModel = Object.keys(MODEL_TOKEN_LIMITS)[0] || '';
   return (
     <div className="min-h-screen bg-gray-50 relative">
       <Navbar />
-
       <main className="max-w-7xl mx-auto px-4 py-8">
 
         {/* Success message */}
@@ -322,58 +355,34 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* ② – toggles + model selectors ------------------------------ */}
-        <div className="space-y-4 mb-6 text-gray-600">
-          {/* Summarization */}
-          <div className="bg-white p-4 rounded-lg">
-            <label className="flex items-center gap-3 mb-2">
-              <input
-                type="checkbox"
-                checked={runSummarization}
-                onChange={(e) => setRunSummarization(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="font-medium">Enable Summarization</span>
-            </label>
-            <ModelSelector
-              selectedModel={selectedSummarizationModel}
-              onModelChange={setSelectedSummarizationModel}
-              disabled={!runSummarization}
-            />
-          </div>
-
-          {/* Information retrieval */}
-          <div className="bg-white p-4 rounded-lg shadow-sm">
-            <label className="flex items-center gap-3 mb-2">
-              <input
-                type="checkbox"
-                checked={runInfoRetrieval}
-                onChange={(e) => setRunInfoRetrieval(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="font-medium">Enable Information Retrieval</span>
-            </label>
-            <ModelSelector
-              selectedModel={selectedInfoRetrievalModel}
-              onModelChange={setSelectedInfoRetrievalModel}
-              disabled={!runInfoRetrieval}
-            />
-          </div>
-        </div>
 
         {/* ③ – analyze / save buttons + file tree --------------------- */}
         {fileTree.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <div className="mb-4 flex items-center justify-between">
-              <FileAnalysisButtons
-                fileTree={fileTree}
-                summarizationModel={runSummarization ? selectedSummarizationModel : ''}
-                infoRetrievalModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
-                consolidationModel={runInfoRetrieval ? selectedInfoRetrievalModel : ''}
+                <FileAnalysisButtons
+                  fileTree={fileTree}
+                summarizationModel={
+                  runSummarization
+                    ? localStorage.getItem('summarizationModel') || defaultModel
+                    : ''
+                }
+                infoRetrievalModel={
+                  runInfoRetrieval
+                    ? localStorage.getItem('infoRetrievalModel') || defaultModel
+                    : ''
+                }
+                consolidationModel={
+                  runInfoRetrieval
+                    ? localStorage.getItem('infoRetrievalModel') || defaultModel
+                    : ''
+                }
                 runSummarization={runSummarization}
                 runInfoRetrieval={runInfoRetrieval}
                 analyzeFiles={runFullAnalysis}
-                openSaveModal={() =>
+                openSaveModal={() => {
+                  // default session name to the current upload folder when saving
+                  setNewUploadName(uploadName);
                   openSaveModal(
                     setNewUploadName,
                     setExistingUploadId,
@@ -381,8 +390,8 @@ export default function Dashboard() {
                     setShowSaveModal,
                     setExistingUploads,
                     setFetchingUploads
-                  )
-                }
+                  );
+                }}
                 toggleAllFiles={(state) => toggleAllFiles(state, setFileTree)}
                 allSelected={allSelected}
                 setAllSelected={setAllSelected}
@@ -484,59 +493,6 @@ export default function Dashboard() {
           />
         )}
 
-        {/* ⑤ – debug toggles ------------------------------------------ */}
-        <button
-          onClick={() => setShowDebug(!showDebug)}
-          className="mb-4 bg-gray-200 text-gray-800 px-3 py-1 rounded ml-2"
-        >
-          {showDebug ? 'Hide LLM Debug Info' : 'Show LLM Debug Info'}
-        </button>
-
-        {showDebug && (
-          <div className="bg-white p-4 rounded shadow mb-6 max-h-80 overflow-y-auto text-gray-600">
-            <h3 className="text-lg font-semibold mb-2">Extraction Debug Info</h3>
-            {Object.entries(rawResponses).map(([filePath, debug]) => (
-              <div key={filePath} className="mb-4 border-b pb-2">
-                <p className="font-medium text-gray-700">File: {filePath}</p>
-                <p className="text-sm text-gray-600">
-                  <span className="font-semibold">Prompt:</span> {debug.prompt}
-                </p>
-                <p className="text-sm text-gray-600">
-                  <span className="font-semibold">Response:</span> {debug.response}
-                </p>
-              </div>
-            ))}
-
-            {llmConsolidationDebug.length > 0 && (
-              <div className="mt-4 border-t pt-2">
-                <h3 className="text-lg font-semibold mb-2">Consolidation Debug Info</h3>
-                {llmConsolidationDebug.map((debug, index) => (
-                  <div key={index} className="mb-4 border-b pb-2">
-                    <p className="text-sm text-gray-600">
-                      <span className="font-semibold">Prompt:</span> {debug.prompt}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      <span className="font-semibold">Response:</span> {debug.response}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Intermediate consolidation results */}
-            <div className="mt-4 border-t pt-2">
-              <h3 className="text-lg font-semibold mb-2">Intermediate Consolidation Results</h3>
-              {Object.entries(extractedCompanies).map(([file, companies]) => (
-                <div key={file} className="mb-4">
-                  <p className="font-medium">{file}</p>
-                  <pre className="text-xs">
-                    {JSON.stringify(companies, null, 2)}
-                  </pre>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* ⑥ – save modal -------------------------------------------- */}
         <SaveModal
