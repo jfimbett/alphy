@@ -67,7 +67,11 @@ export default function Navbar() {
         <div className="flex items-center space-x-4">
           {loggedIn ? (
             <>
-              <Link href="/dashboard">
+              <Link href="/dashboard" onClick={() => {
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem('currentSessionId');
+                }
+              }}>
                 <span className="text-gray-700 hover:text-blue-600 transition-colors">Dashboard</span>
               </Link>
               <Link href="/history">

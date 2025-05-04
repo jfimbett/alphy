@@ -78,8 +78,9 @@ export default function CompaniesPage() {
   const searchParams   = useSearchParams();
   const existingSessionId = searchParams.get('sessionId');
 
-  // Consolidated companies, raw LLM responses & consolidation debug
+  // Consolidated companies, summaries, raw LLM responses & consolidation debug
   const [companies, setCompanies]             = useState<ConsolidatedCompany[]>([]);
+  const [summaries, setSummaries]             = useState<Record<string, string>>({});
   const [rawResponses, setRawResponses]       = useState<Record<string, { prompt: string; response: string }>>({});
   const [consolidationDebug, setConsolidationDebug] = useState<Array<{ prompt: string; response: string }>>([]);
 
@@ -255,6 +256,9 @@ export default function CompaniesPage() {
           type: c.type ?? 'company'
         }));
         setCompanies(normalized);
+        // Load per-file summaries (if any)
+        setSummaries(data.summaries || {});
+        // Load raw LLM responses per file
         setRawResponses(data.rawResponses || {});
         // Load consolidation debug entries if present
         setConsolidationDebug(data.consolidationDebug || []);
@@ -501,46 +505,44 @@ export default function CompaniesPage() {
           <span className="font-medium">Estimated LLM tokens used:</span>{" "}
           <span className="font-semibold">{tokenCount}</span>
         </div>
-
-        {renderCompanySection('fund', '#2563eb')}
-        {renderCompanySection('company', '#16a34a')}
-
-        {/* ───────────────────────────────────────────────────────────
-            NEW ‑ Raw LLM JSON per file
-            ──────────────────────────────────────────────────────── */}
-        <section className="mt-8">
-          <h2 className="text-xl font-semibold mb-4">Raw LLM JSON per file</h2>
-          {Object.keys(rawResponses).length === 0 ? (
-            <p className="text-gray-600 italic">
-              No raw responses were stored for this session.
-            </p>
-          ) : (
-            <ul className="space-y-4">
-              {Object.entries(rawResponses).map(([filePath, dbg]) => {
-                const isOpen = expandedRaw.has(filePath);
-                const fileName = filePath.split('/').pop() ?? filePath;
+        {/* Document Summaries (if available) */}
+        {Object.keys(summaries).length > 0 && (
+          <section className="mb-8 bg-white p-6 rounded-lg shadow-sm">
+            <h2 className="text-xl font-semibold mb-4">Document Summaries</h2>
+            <ul className="space-y-6">
+              {Object.entries(summaries).map(([filePath, summary]) => {
+                const fileName = filePath.split('/').pop() || filePath;
                 return (
-                  <li key={filePath} className="border p-4 rounded-lg bg-white">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium truncate">{fileName}</span>
-                      <button
-                        onClick={() => toggleRaw(filePath)}
-                        className="text-sm px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 transition-colors"
-                      >
-                        {isOpen ? 'Hide' : 'Show'} raw JSON
-                      </button>
-                    </div>
-                    {isOpen && (
-                      <pre className="mt-3 bg-gray-50 rounded p-3 text-xs overflow-x-auto max-h-80 whitespace-pre-wrap">
-                        {prettyJSON(dbg.response)}
-                      </pre>
-                    )}
+                  <li key={filePath}>
+                    <h3 className="font-medium">{fileName}</h3>
+                    <p className="mt-2 text-gray-700 whitespace-pre-wrap">{summary}</p>
                   </li>
                 );
               })}
             </ul>
-          )}
-        </section>
+          </section>
+        )}
+        {/* Document Summaries (if enabled) */}
+        {Object.keys(summaries).length > 0 && (
+          <section className="mb-8 bg-white p-6 rounded-lg shadow-sm">
+            <h2 className="text-xl font-semibold mb-4">Document Summaries</h2>
+            <ul className="space-y-6">
+              {Object.entries(summaries).map(([filePath, summary]) => {
+                const fileName = filePath.split('/').pop() || filePath;
+                return (
+                  <li key={filePath}>
+                    <h3 className="font-medium">{fileName}</h3>
+                    <p className="mt-2 text-gray-700 whitespace-pre-wrap">{summary}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {renderCompanySection('fund', '#2563eb')}
+        {renderCompanySection('company', '#16a34a')}
+
         {/* ───────────────────────────────────────────────────────────
             Raw LLM Consolidation JSON (toggleable)
             ──────────────────────────────────────────────────────── */}

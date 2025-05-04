@@ -7,6 +7,9 @@ Return **only** valid JSON (no markdown fences, no extra text). You are in JSON 
 
 You are a Summarization Assistant. Your job is to read the text below—written in any language—and produce a single-paragraph summary in clear, fluent English. Focus on the following:
 
+**IMPORTANT**: Only include companies that are explicitly mentioned in the document text. Do not invent or hallucinate any company names.
+Your summary must be based solely on the provided text.
+
 Key financial metrics (e.g., revenue, assets, profitability)
 Risks (e.g., market risks, operational risks)
 Opportunities (e.g., potential growth, strategic advantages)
@@ -48,7 +51,9 @@ export const defaultExtractionTemplate = `
 ### IMPORTANT
 Return **only** valid JSON (no markdown fences, no extra text). You are in JSON mode.
 
-You are an Information Extraction Assistant. Your task is to read the given text (which may appear in any language) and extract any company-level financial data into a well-structured JSON array. 
+You are an Information Extraction Assistant. Your task is to read the given text (which may appear in any language) and extract any company-level financial data into a well-structured JSON array.
+
+**IMPORTANT**: Only extract company names that appear exactly in the document text. Do not invent or hallucinate any names.
 There could be multiple companies mentioned, so generate an array entry for each distinct company.
 
 **IMPORTANT**: 

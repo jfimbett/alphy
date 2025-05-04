@@ -383,7 +383,12 @@ export const processZip = async (
 
   const files = await Promise.all(
     Object.values(zipContent.files)
-      .filter((entry) => !entry.dir)
+      // Exclude directories, macOS metadata and DS_Store files
+      .filter((entry) =>
+        !entry.dir &&
+        !entry.name.includes('__MACOSX') &&
+        !entry.name.endsWith('.DS_Store')
+      )
       .map(async (entry) => {
         const data = await entry.async('arraybuffer');
         const base64Data = arrayBufferToBase64(data);
@@ -408,7 +413,10 @@ export const processFolder = async (
   fileList: FileList,
   setFileTree: React.Dispatch<React.SetStateAction<FileNode[]>>
 ) => {
-  const filePromises = Array.from(fileList).map((file) => {
+  // Exclude macOS DS_Store files
+  const filePromises = Array.from(fileList)
+    .filter((file) => file.name !== '.DS_Store')
+    .map((file) => {
     return new Promise<FilePayload>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
